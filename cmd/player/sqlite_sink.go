@@ -260,12 +260,58 @@ func (s *SqliteSink) handleListColumns(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(columns)
 }
 
+func (s *SqliteSink) handleListAllTablesColumns(w http.ResponseWriter, r *http.Request) {
+	tableRows, err := s.DB.Query("SELECT name FROM sqlite_schema WHERE type='table'")
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Error listing tables: %v", err), http.StatusInternalServerError)
+		return
+	}
+	defer tableRows.Close()
+
+	result := make(map[string][]string)
+
+	for tableRows.Next() {
+		var tableName string
+		if err := tableRows.Scan(&tableName); err != nil {
+			http.Error(w, fmt.Sprintf("Error scanning table name: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		columnRows, err := s.DB.Query(fmt.Sprintf("PRAGMA table_info(%s)", tableName))
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Error getting columns for table %s: %v", tableName, err), http.StatusInternalServerError)
+			return
+		}
+		defer columnRows.Close()
+
+		var columns []string
+		for columnRows.Next() {
+			var cid int
+			var name, dataType string
+			var notNull, pk int
+			var dfltValue interface{}
+			if err := columnRows.Scan(&cid, &name, &dataType, &notNull, &dfltValue, &pk); err != nil {
+				http.Error(w, fmt.Sprintf("Error scanning column info: %v", err), http.StatusInternalServerError)
+				return
+			}
+			columns = append(columns, name)
+		}
+
+		result[tableName] = columns
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
+}
+
 func (s *SqliteSink) Start() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc(fmt.Sprintf("/%s/rpf-db/", s.ID), s.handleGetRequest)
 	mux.HandleFunc(fmt.Sprintf("/%s/query-table/", s.ID), s.handleGetRequest)
+	mux.HandleFunc(fmt.Sprintf("/%s/find/", s.ID), s.handleFindRequest)
 	mux.HandleFunc(fmt.Sprintf("/%s/list", s.ID), s.handleListTables)
 	mux.HandleFunc(fmt.Sprintf("/%s/columns/", s.ID), s.handleListColumns)
+	mux.HandleFunc(fmt.Sprintf("/%s/all-columns/", s.ID), s.handleListAllTablesColumns)
 
 	if s.StaticDir != "" {
 		mux.Handle(fmt.Sprintf("/%s/static/", s.ID), http.StripPrefix(fmt.Sprintf("/%s/static/", s.ID), http.FileServer(http.Dir(s.StaticDir))))
@@ -381,7 +427,7 @@ func (s *SqliteSink) ensureColumnExists(table, column, dataType string) error {
 		}
 		s.TableSchemas[table][column] = dataType
 
-		if strings.HasSuffix(column, "idx") || strings.HasSuffix(column, "index") || strings.HasSuffix(column, "id") || strings.HasSuffix(column, "fk") {
+		if strings.HasSuffix(column, "idx") || strings.HasSuffix(column, "index") || strings.HasSuffix(column, "id") || strings.Contains(column, "fk") {
 			indexQuery := fmt.Sprintf("CREATE INDEX IF NOT EXISTS idx_%s_%s ON %s(%s)",
 				table, column, table, column)
 			_, err = s.DB.Exec(indexQuery)
@@ -557,6 +603,67 @@ func (s *SqliteSink) handleDelete(table string, body []byte) error {
 	}
 	return nil
 }
+
+func (s *SqliteSink) handleFindRequest(w http.ResponseWriter, r *http.Request) {
+	pathParts := strings.Split(r.URL.Path, "/")
+	if len(pathParts) < 4 {
+		http.Error(w, "Invalid path format", http.StatusBadRequest)
+		return
+	}
+
+	table := pathParts[len(pathParts)-2]
+	id := pathParts[len(pathParts)-1]
+
+	// First get the column names
+	columnRows, err := s.DB.Query(fmt.Sprintf("SELECT * FROM %s WHERE 1=0", table))
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Error getting columns: %v", err), http.StatusInternalServerError)
+		return
+	}
+	columns, err := columnRows.Columns()
+	columnRows.Close()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Error getting columns: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Now query the actual row
+	query := fmt.Sprintf("SELECT * FROM %s WHERE id = ?", table)
+	row := s.DB.QueryRow(query, id)
+
+	values := make([]interface{}, len(columns))
+	valuePtrs := make([]interface{}, len(columns))
+	for i := range columns {
+		valuePtrs[i] = &values[i]
+	}
+
+	err = row.Scan(valuePtrs...)
+	if err == sql.ErrNoRows {
+		http.Error(w, "Record not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Error scanning row: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	result := make(map[string]interface{})
+	for i, col := range columns {
+		var v interface{}
+		val := values[i]
+		b, ok := val.([]byte)
+		if ok {
+			v = string(b)
+		} else {
+			v = val
+		}
+		result[col] = v
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
+}
+
 func (s *SqliteSink) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 	table := strings.TrimPrefix(r.URL.Path, fmt.Sprintf("/%s/rpf-db/", s.ID))
 	table = strings.TrimPrefix(table, fmt.Sprintf("/%s/query-table/", s.ID))
@@ -679,7 +786,10 @@ func (s *SqliteSink) castValue(table, column, value string) (interface{}, string
 func sanitizeIdentifier(input string) string {
 	// Only allow alphanumeric characters and underscores
 	reg := regexp.MustCompile(`[^a-zA-Z0-9_]`)
-	return reg.ReplaceAllString(input, "")
+	processed := reg.ReplaceAllString(input, "")
+	// Convert camelCase to snake_case
+	snakeCase := regexp.MustCompile(`([a-z0-9])([A-Z])`).ReplaceAllString(processed, "${1}_${2}")
+	return strings.ToLower(snakeCase)
 }
 
 func (s *SqliteSink) loadTableSchemas() {
