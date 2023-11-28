@@ -95,9 +95,24 @@ func (s *SystemStatsSource) collectStats() {
                 HostName:        config.HostName,
             }
 
-            jsonContent, err := json.Marshal(stats)
+            bodyJSON, err := json.Marshal(stats)
             if err != nil {
                 logger.ErrorContext("source", s.ID, "Error marshaling stats: %v", err)
+                continue
+            }
+
+            wrapCallObject := map[string]interface{}{
+                "ip":      "127.0.0.1",
+                "path":    fmt.Sprintf("ts_gauge_systemstats_%ds", int(s.Interval.Seconds())),
+                "params":  map[string]string{},
+                "headers": map[string]string{"Content-Type": "application/json"},
+                "body":    string(bodyJSON),
+                "method":  "POST",
+            }
+
+            jsonContent, err := json.Marshal(wrapCallObject)
+            if err != nil {
+                logger.ErrorContext("source", s.ID, "Error marshaling JSON: %v", err)
                 continue
             }
 
