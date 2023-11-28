@@ -95,6 +95,8 @@ func setupSources() {
 			source = &RepeatFileSource{}
 		case "pgcall":
 			source = &PgCallSource{}
+		case "system-stats":
+			source = &SystemStatsSource{}
 		default:
 			logger.FatalContext("source", sourceConfig.ID, "Unsupported source type: %s", sourceConfig.Type)
 		}
