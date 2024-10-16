@@ -8,7 +8,7 @@
 
 version: 2
 
-project_name: relay
+project_name: player
 
 release:
   # Repo in which the release will be created.
