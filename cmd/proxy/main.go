@@ -22,7 +22,7 @@ var (
  proxyDbPath             = "proxy.sqlite3"
  dbFolder                string
  heartbeatIntervalMs     = 100
- maxDbSize               = int64(100 * 1024 * 1024) // 100 MB
+ maxDbSize               = int64(10 * 1024 * 1024) // 10 MB
  relayUrl                string
  relayAuthenticationBearer string
  buckets                 []string
