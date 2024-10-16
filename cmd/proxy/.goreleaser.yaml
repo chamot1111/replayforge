@@ -8,6 +8,8 @@
 
 version: 2
 
+project_name: proxy
+
 release:
   # Repo in which the release will be created.
   # Default: extracted from the origin remote URL or empty if its private hosted.
