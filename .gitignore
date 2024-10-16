@@ -51,3 +51,8 @@ node_modules/
 *.bak
 *.tmp
 *.temp
+
+# Distribution folders #
+########################
+**/dist/
+dist/
