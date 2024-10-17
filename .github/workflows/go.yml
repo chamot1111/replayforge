@@ -20,13 +20,19 @@ jobs:
         go-version: '1.23'
 
     - name: Build for Linux
-      run: go build -v -o player-linux-amd64 ./cmd/player
+      run: |
+        go build -v -o player-linux-amd64 ./cmd/player
+        go build -v -o proxy-linux-amd64 ./cmd/proxy
+        go build -v -o relay-linux-amd64 ./cmd/relay
 
-    - name: Upload Linux artifact
+    - name: Upload Linux artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: player-linux-amd64
-        path: player-linux-amd64
+        name: linux-amd64-binaries
+        path: |
+          player-linux-amd64
+          proxy-linux-amd64
+          relay-linux-amd64
 
   build-macos:
     runs-on: macos-latest
@@ -41,13 +47,19 @@ jobs:
         go-version: '1.23'
 
     - name: Build for macOS
-      run: go build -v -o player-macos-amd64 ./cmd/player
+      run: |
+        go build -v -o player-macos-amd64 ./cmd/player
+        go build -v -o proxy-macos-amd64 ./cmd/proxy
+        go build -v -o relay-macos-amd64 ./cmd/relay
 
-    - name: Upload macOS artifact
+    - name: Upload macOS artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: player-macos-amd64
-        path: player-macos-amd64
+        name: macos-amd64-binaries
+        path: |
+          player-macos-amd64
+          proxy-macos-amd64
+          relay-macos-amd64
 
   create-release:
     needs: [build-linux, build-macos]
@@ -60,8 +72,12 @@ jobs:
       uses: softprops/action-gh-release@v2
       with:
         files: |
-          player-linux-amd64/player-linux-amd64
-          player-macos-amd64/player-macos-amd64
+          linux-amd64-binaries/player-linux-amd64
+          linux-amd64-binaries/proxy-linux-amd64
+          linux-amd64-binaries/relay-linux-amd64
+          macos-amd64-binaries/player-macos-amd64
+          macos-amd64-binaries/proxy-macos-amd64
+          macos-amd64-binaries/relay-macos-amd64
         name: Release ${{ github.ref_name }}
         draft: false
         prerelease: false
