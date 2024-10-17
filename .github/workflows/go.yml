@@ -23,21 +23,11 @@ jobs:
       run: go build -v ./cmd/player
 
     - name: Create Release
-      uses: actions/create-release@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      uses: softprops/action-gh-release@v2
       with:
-        tag_name: ${{ github.ref }}
-        release_name: Release ${{ github.ref }}
+        files: ./cmd/player/player
+        name: Release ${{ github.ref }}
         draft: false
         prerelease: false
-
-    - name: Upload Release Assets
-      uses: actions/upload-release-asset@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: ./cmd/player/player
-        asset_name: player-${{ matrix.os }}-${{ matrix.arch }}
-        asset_content_type: application/octet-stream
