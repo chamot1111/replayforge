@@ -23,7 +23,7 @@ jobs:
       run: go build -v -o player-linux-amd64 ./cmd/player
 
     - name: Upload Linux artifact
-      uses: actions/upload-artifact@v2
+      uses: actions/upload-artifact@v4
       with:
         name: player-linux-amd64
         path: player-linux-amd64
@@ -44,7 +44,7 @@ jobs:
       run: go build -v -o player-macos-amd64 ./cmd/player
 
     - name: Upload macOS artifact
-      uses: actions/upload-artifact@v2
+      uses: actions/upload-artifact@v4
       with:
         name: player-macos-amd64
         path: player-macos-amd64
