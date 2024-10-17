@@ -133,21 +133,22 @@ func init() {
   }
  }
 }
-
-func setupSql() (*sql.DB, error) {
+func setupSql(canVacuum bool) (*sql.DB, error) {
  info, err := os.Stat(proxyDbPath)
  if err == nil && info.Size() > maxDbSize {
-  log.Printf("Attempting to vacuum database...")
-  tempDB, err := sql.Open("sqlite3", proxyDbPath)
-  if err != nil {
-   return nil, fmt.Errorf("failed to open database: %v", err)
+  if canVacuum {
+   log.Printf("Attempting to vacuum database...")
+   tempDB, err := sql.Open("sqlite3", proxyDbPath)
+   if err != nil {
+    return nil, fmt.Errorf("failed to open database: %v", err)
+   }
+   _, err = tempDB.Exec("VACUUM")
+   tempDB.Close()
+   if err != nil {
+    return nil, fmt.Errorf("failed to vacuum database: %v", err)
+   }
+   info, _ = os.Stat(proxyDbPath)
   }
-  _, err = tempDB.Exec("VACUUM")
-  tempDB.Close()
-  if err != nil {
-   return nil, fmt.Errorf("failed to vacuum database: %v", err)
-  }
-  info, _ = os.Stat(proxyDbPath)
   if info.Size() > maxDbSize {
    return nil, fmt.Errorf("database size (%d bytes) exceeded maximum limit (%d bytes)", info.Size(), maxDbSize)
   }
@@ -172,7 +173,7 @@ func setupSql() (*sql.DB, error) {
 }
 
 func initSetupSql() (*sql.DB, error) {
- db, err := setupSql()
+ db, err := setupSql(true)
  if err != nil {
   return nil, fmt.Errorf("failed to setup database: %v", err)
  }
@@ -201,7 +202,7 @@ func initSetupSql() (*sql.DB, error) {
 }
 
 func handleHttpRequest(w http.ResponseWriter, r *http.Request) {
- db, err := setupSql()
+ db, err := setupSql(false)
  if err != nil {
   log.Printf("Error setting up SQL: %v", err)
   http.Error(w, fmt.Sprintf("Error: %v", err), http.StatusInternalServerError)
@@ -422,7 +423,7 @@ func timerHandler() {
   return
  }
 
- db, err := setupSql()
+ db, err := setupSql(true)
  if err != nil {
   log.Printf("Error setting up SQL: %v", err)
   return

@@ -140,11 +140,12 @@ func handleRecord(w http.ResponseWriter, r *http.Request) {
                 id INTEGER PRIMARY KEY,
                 content TEXT,
                 timestamp INTEGER
-            )
+            );
+            CREATE INDEX IF NOT EXISTS idx_timestamp ON wrap_calls (timestamp);
         `)
         if err != nil {
-            log.Printf("Failed to create table for bucket %s: %v", bucket, err)
-            http.Error(w, "Failed to create table", http.StatusInternalServerError)
+            log.Printf("Failed to create table or index for bucket %s: %v", bucket, err)
+            http.Error(w, "Failed to create table or index", http.StatusInternalServerError)
             return
         }
 
