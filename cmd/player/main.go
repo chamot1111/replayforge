@@ -36,6 +36,7 @@ var (
 	httpPort                  int
 	httpUsername              string
 	httpPassword              string
+	staticAssetsFolder        string
 )
 
 func init() {
@@ -84,6 +85,9 @@ func init() {
 		}
 		if config["httpPassword"] != nil {
 			httpPassword = config["httpPassword"].(string)
+		}
+		if config["staticAssetsFolder"] != nil {
+			staticAssetsFolder = config["staticAssetsFolder"].(string)
 		}
 	}
 
@@ -589,6 +593,11 @@ func main() {
 				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			}
 		}))
+
+		if staticAssetsFolder != "" {
+			fs := http.FileServer(http.Dir(staticAssetsFolder))
+			http.Handle("/assets/", http.StripPrefix("/assets/", fs))
+		}
 
 		fmt.Printf("Starting HTTP server on localhost:%d\n", httpPort)
 		go func() {
