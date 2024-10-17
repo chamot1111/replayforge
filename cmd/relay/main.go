@@ -16,24 +16,40 @@ import (
 )
 
 var (
-	configPath                string
-	dbFolder                  = "./"
-	heartbeatIntervalMs       = 1000
-	dbMaxSizeKb               int
-	tlS                       = 60
-	maxDbSize                 = 100 * 1024 * 1024 // 100 MB
-	relayAuthenticationBearer string
+	configPath          string
+	dbFolder            = "./"
+	heartbeatIntervalMs = 1000
+	dbMaxSizeKb         int
+	tlS                 = 60
+	maxDbSize           = 100 * 1024 * 1024 // 100 MB
+	bucketAuth          map[string]string
 )
 
 type Config struct {
-	RelayAuthenticationBearer string `json:"relayAuthenticationBearer"`
+	BucketAuth map[string]string `json:"bucketAuth"`
 }
 
 func init() {
 	flag.StringVar(&configPath, "c", "", "Path to config file")
-	flag.StringVar(&relayAuthenticationBearer, "a", "", "Relay authentication bearer token")
 	flag.IntVar(&dbMaxSizeKb, "m", 100000, "Maximum database size in KB")
+
+	// Add a new flag for bucket authentication
+	var bucketAuthArg string
+	flag.StringVar(&bucketAuthArg, "b", "", "Bucket authentication in the format 'bucket1:auth1,bucket2:auth2'")
+
 	flag.Parse()
+
+	// Parse the bucket authentication argument
+	if bucketAuthArg != "" {
+		bucketAuth = make(map[string]string)
+		pairs := strings.Split(bucketAuthArg, ",")
+		for _, pair := range pairs {
+			kv := strings.Split(pair, ":")
+			if len(kv) == 2 {
+				bucketAuth[strings.TrimSpace(kv[0])] = strings.TrimSpace(kv[1])
+			}
+		}
+	}
 }
 
 func main() {
@@ -48,13 +64,11 @@ func main() {
 		if err := json.Unmarshal(data, &config); err != nil {
 			log.Fatalf("Failed to parse config file: %v", err)
 		}
-		if config.RelayAuthenticationBearer != "" {
-			relayAuthenticationBearer = config.RelayAuthenticationBearer
-		}
+		bucketAuth = config.BucketAuth
 	}
 
-	if relayAuthenticationBearer == "" {
-		log.Fatal("Relay authentication bearer token is required")
+	if len(bucketAuth) == 0 {
+		log.Fatal("At least one bucket authentication is required")
 	}
 
 	// Main server loop would go here
@@ -65,9 +79,9 @@ func main() {
 	log.Fatal(http.ListenAndServe(":8081", nil))
 }
 
-func verifyAuth(authHeader string) bool {
+func verifyAuth(authHeader, bucket string) bool {
 	if authHeader != "" {
-		if bearer := authHeader[7:]; bearer == relayAuthenticationBearer {
+		if bearer := authHeader[7:]; bearer == bucketAuth[bucket] {
 			return true
 		}
 	}
@@ -75,12 +89,6 @@ func verifyAuth(authHeader string) bool {
 }
 
 func handleRecord(w http.ResponseWriter, r *http.Request) {
-	if !verifyAuth(r.Header.Get("Authorization")) {
-		log.Printf("Authentication failed")
-		http.Error(w, "Authentication failed", http.StatusUnauthorized)
-		return
-	}
-
 	if r.Method != http.MethodPost {
 		log.Printf("Method not allowed: %s", r.Method)
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -97,6 +105,12 @@ func handleRecord(w http.ResponseWriter, r *http.Request) {
 	buckets := strings.Split(r.Header.Get("RF-BUCKETS"), ",")
 	for _, bucket := range buckets {
 		bucket = strings.TrimSpace(bucket)
+		if !verifyAuth(r.Header.Get("Authorization"), bucket) {
+			log.Printf("Authentication failed for bucket: %s", bucket)
+			http.Error(w, "Authentication failed", http.StatusUnauthorized)
+			return
+		}
+
 		dbFolderBucket := filepath.Join(dbFolder, bucket)
 		dbPath := filepath.Join(dbFolderBucket, "relay.sqlite3")
 
@@ -137,13 +151,13 @@ func handleRecord(w http.ResponseWriter, r *http.Request) {
 		}
 
 		_, err = db.Exec(`
-            CREATE TABLE IF NOT EXISTS wrap_calls (
-                id INTEGER PRIMARY KEY,
-                content TEXT,
-                timestamp INTEGER
-            );
-            CREATE INDEX IF NOT EXISTS idx_timestamp ON wrap_calls (timestamp);
-        `)
+			CREATE TABLE IF NOT EXISTS wrap_calls (
+							id INTEGER PRIMARY KEY,
+							content TEXT,
+							timestamp INTEGER
+			);
+			CREATE INDEX IF NOT EXISTS idx_timestamp ON wrap_calls (timestamp);
+								`)
 		if err != nil {
 			log.Printf("Failed to create table or index for bucket %s: %v", bucket, err)
 			http.Error(w, "Failed to create table or index", http.StatusInternalServerError)
@@ -168,12 +182,6 @@ func handleRecord(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleFirst(w http.ResponseWriter, r *http.Request) {
-	if !verifyAuth(r.Header.Get("Authorization")) {
-		log.Printf("Authentication failed")
-		http.Error(w, "Authentication failed", http.StatusUnauthorized)
-		return
-	}
-
 	if r.Method != http.MethodGet {
 		log.Printf("Method not allowed: %s", r.Method)
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -184,6 +192,12 @@ func handleFirst(w http.ResponseWriter, r *http.Request) {
 	if bucket == "" {
 		log.Printf("Missing RF-BUCKET header")
 		http.Error(w, "Missing RF-BUCKET header", http.StatusBadRequest)
+		return
+	}
+
+	if !verifyAuth(r.Header.Get("Authorization"), bucket) {
+		log.Printf("Authentication failed for bucket: %s", bucket)
+		http.Error(w, "Authentication failed", http.StatusUnauthorized)
 		return
 	}
 
@@ -220,10 +234,10 @@ func handleFirst(w http.ResponseWriter, r *http.Request) {
 	var id int
 	var content string
 	err = db.QueryRow(`
-        SELECT id, content
-        FROM wrap_calls
-        WHERE id = (SELECT MIN(id) FROM wrap_calls)
-    `).Scan(&id, &content)
+								SELECT id, content
+								FROM wrap_calls
+								WHERE id = (SELECT MIN(id) FROM wrap_calls)
+				`).Scan(&id, &content)
 
 	if err == sql.ErrNoRows {
 		w.WriteHeader(http.StatusNotFound)
@@ -246,12 +260,6 @@ func handleFirst(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleAcknowledge(w http.ResponseWriter, r *http.Request) {
-	if !verifyAuth(r.Header.Get("Authorization")) {
-		log.Printf("Authentication failed")
-		http.Error(w, "Authentication failed", http.StatusUnauthorized)
-		return
-	}
-
 	if r.Method != http.MethodDelete {
 		log.Printf("Method not allowed: %s", r.Method)
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -262,6 +270,12 @@ func handleAcknowledge(w http.ResponseWriter, r *http.Request) {
 	if bucket == "" {
 		log.Printf("Missing RF-BUCKET header")
 		http.Error(w, "Missing RF-BUCKET header", http.StatusBadRequest)
+		return
+	}
+
+	if !verifyAuth(r.Header.Get("Authorization"), bucket) {
+		log.Printf("Authentication failed for bucket: %s", bucket)
+		http.Error(w, "Authentication failed", http.StatusUnauthorized)
 		return
 	}
 
