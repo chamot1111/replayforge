@@ -1,3 +1,5 @@
 /player
 
 dist/
+
+/player.sqlite3
