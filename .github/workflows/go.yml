@@ -20,13 +20,13 @@ jobs:
         go-version: '1.23'
 
     - name: Build
-      run: go build -v ./cmd/player
+      run: go build -v -o player-linux-amd64 ./cmd/player
 
     - name: Create Release
       uses: softprops/action-gh-release@v2
       with:
-        files: ./cmd/player/player
-        name: Release ${{ github.ref }}
+        files: ./player-linux-amd64
+        name: Release ${{ github.ref_name }}
         draft: false
         prerelease: false
       env:
