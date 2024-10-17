@@ -19,7 +19,7 @@ var (
  configPath         string
  dbFolder           = "./"
  heartbeatIntervalMs = 1000
- dbMaxSizeKb        = 100000
+ dbMaxSizeKb        int
  tlS               = 60
  maxDbSize          = 100 * 1024 * 1024 // 100 MB
  relayAuthenticationBearer string
@@ -32,6 +32,7 @@ type Config struct {
 func init() {
  flag.StringVar(&configPath, "c", "", "Path to config file")
  flag.StringVar(&relayAuthenticationBearer, "a", "", "Relay authentication bearer token")
+ flag.IntVar(&dbMaxSizeKb, "m", 100000, "Maximum database size in KB")
  flag.Parse()
 }
 
