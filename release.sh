@@ -1,5 +1,9 @@
 #!/bin/bash
 
+echo "This script is deprecated. Please use GitHub Workflow instead."
+echo "Exiting..."
+exit 0
+
 if [ -n "$(git status --porcelain)" ]; then
     echo "Git working directory is not clean. Please commit or stash your changes."
     exit 1
