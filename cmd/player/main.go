@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -33,6 +34,8 @@ var (
 	dbMode                    bool
 	tableSchemas              map[string]map[string]string
 	httpPort                  int
+	httpUsername              string
+	httpPassword              string
 )
 
 func init() {
@@ -76,6 +79,12 @@ func init() {
 		if config["httpPort"] != nil {
 			httpPort = int(config["httpPort"].(float64))
 		}
+		if config["httpUsername"] != nil {
+			httpUsername = config["httpUsername"].(string)
+		}
+		if config["httpPassword"] != nil {
+			httpPassword = config["httpPassword"].(string)
+		}
 	}
 
 	if relayUrl == "" {
@@ -90,6 +99,9 @@ func init() {
 	}
 	if serverSecret == "" {
 		panic("serverSecret must be specified either with -s flag or in the config file")
+	}
+	if httpUsername == "" || httpPassword == "" {
+		panic("httpUsername and httpPassword must be specified in the config file")
 	}
 
 	if targetHost == "" {
@@ -539,17 +551,44 @@ func handleGetRequest(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(result)
 }
 
+func basicAuth(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		if auth == "" {
+			w.Header().Set("WWW-Authenticate", `Basic realm="Restricted"`)
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		authParts := strings.SplitN(auth, " ", 2)
+		if len(authParts) != 2 || authParts[0] != "Basic" {
+			http.Error(w, "Invalid Authorization header", http.StatusBadRequest)
+			return
+		}
+
+		payload, _ := base64.StdEncoding.DecodeString(authParts[1])
+		pair := strings.SplitN(string(payload), ":", 2)
+
+		if len(pair) != 2 || pair[0] != httpUsername || pair[1] != httpPassword {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	}
+}
+
 func main() {
 	if dbMode {
 		defer db.Close()
 
-		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		http.HandleFunc("/", basicAuth(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == "GET" {
 				handleGetRequest(w, r)
 			} else {
 				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			}
-		})
+		}))
 
 		fmt.Printf("Starting HTTP server on localhost:%d\n", httpPort)
 		go func() {
