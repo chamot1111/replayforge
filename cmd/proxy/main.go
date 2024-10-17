@@ -5,7 +5,7 @@ import (
  "encoding/json"
  "flag"
  "fmt"
- "io/ioutil"
+ "io"
  "log"
  "net/http"
  "os"
@@ -15,6 +15,7 @@ import (
 
  _ "github.com/mattn/go-sqlite3"
  "github.com/golang-jwt/jwt/v5"
+ "github.com/dop251/goja"
 )
 
 var (
@@ -27,8 +28,10 @@ var (
  relayAuthenticationBearer string
  buckets                 []string
  serverSecret            string
- db                      *sql.DB
  lastVacuumTime          time.Time
+ scriptPath              string
+ vm                      *goja.Runtime
+ hookIntervalSeconds     int
 )
 
 func init() {
@@ -36,6 +39,8 @@ func init() {
  flag.StringVar(&relayUrl, "r", "", "Relay URL")
  flag.StringVar(&serverSecret, "s", "", "Server secret")
  flag.StringVar(&relayAuthenticationBearer, "a", "", "Relay authentication bearer token")
+ flag.StringVar(&scriptPath, "script", "", "Path to JavaScript script")
+ flag.IntVar(&hookIntervalSeconds, "hook-interval", 60, "Interval in seconds for timer_handler")
  flag.Func("b", "Bucket name (can be specified multiple times)", func(s string) error {
   buckets = append(buckets, s)
   return nil
@@ -44,7 +49,7 @@ func init() {
 
  if configPath != "" {
   log.Printf("Config path: %s", configPath)
-  configData, err := ioutil.ReadFile(configPath)
+  configData, err := os.ReadFile(configPath)
   if err != nil {
    log.Fatalf("Failed to read config file: %v", err)
   }
@@ -77,6 +82,16 @@ func init() {
     }
    }
   }
+  if scriptPath == "" {
+   if scriptFromConfig, ok := config["scriptPath"].(string); ok {
+    scriptPath = scriptFromConfig
+   }
+  }
+  if hookIntervalSeconds == 60 {
+   if intervalFromConfig, ok := config["hookIntervalSeconds"].(float64); ok {
+    hookIntervalSeconds = int(intervalFromConfig)
+   }
+  }
  }
 
  if relayUrl == "" || serverSecret == "" || len(buckets) == 0 || relayAuthenticationBearer == "" {
@@ -88,61 +103,111 @@ func init() {
  if !strings.HasSuffix(relayUrl, "/") {
   relayUrl += "/"
  }
-}
 
-func setupSql() error {
- if db == nil {
-  info, err := os.Stat(proxyDbPath)
-  if err == nil && info.Size() > maxDbSize {
-   tempDB, err := sql.Open("sqlite3", proxyDbPath)
+ if scriptPath != "" {
+  log.Printf("Loading script from: %s", scriptPath)
+  vm = goja.New()
+
+  // Add print function to the VM
+  vm.Set("print", func(call goja.FunctionCall) goja.Value {
+   fmt.Println("[Script]", call.Argument(0).String())
+   return goja.Undefined()
+  })
+
+  script, err := os.ReadFile(scriptPath)
+  if err != nil {
+   log.Fatalf("Failed to read script file: %v", err)
+  }
+  _, err = vm.RunString(string(script))
+  if err != nil {
+   log.Fatalf("Failed to load script: %v", err)
+  }
+
+  // Call the init hook if it exists
+  initFn, ok := goja.AssertFunction(vm.Get("init"))
+  if ok {
+   _, err := initFn(goja.Undefined())
    if err != nil {
-    return fmt.Errorf("failed to open database: %v", err)
+    log.Fatalf("Failed to run init hook: %v", err)
    }
-   _, err = tempDB.Exec("VACUUM")
-   tempDB.Close()
-   if err != nil {
-    return fmt.Errorf("failed to vacuum database: %v", err)
-   }
-   info, _ = os.Stat(proxyDbPath)
-   if info.Size() > maxDbSize {
-    return fmt.Errorf("database size exceeded maximum limit")
-   }
-  }
-
-  // err is already declared in the outer scope
-  db, err = sql.Open("sqlite3", proxyDbPath)
-  if err != nil {
-   return fmt.Errorf("failed to open database: %v", err)
-  }
-
-  _, err = db.Exec("PRAGMA journal_mode=WAL")
-  if err != nil {
-   return fmt.Errorf("failed to set journal mode: %v", err)
-  }
-
-  _, err = db.Exec("PRAGMA synchronous=NORMAL")
-  if err != nil {
-   return fmt.Errorf("failed to set synchronous mode: %v", err)
-  }
-
-  _, err = db.Exec(`
-   CREATE TABLE IF NOT EXISTS wrap_calls (
-    id INTEGER PRIMARY KEY,
-    content TEXT
-   )
-  `)
-  if err != nil {
-   return fmt.Errorf("failed to create table: %v", err)
   }
  }
- return nil
+}
+
+func setupSql() (*sql.DB, error) {
+ info, err := os.Stat(proxyDbPath)
+ if err == nil && info.Size() > maxDbSize {
+  log.Printf("Attempting to vacuum database...")
+  tempDB, err := sql.Open("sqlite3", proxyDbPath)
+  if err != nil {
+   return nil, fmt.Errorf("failed to open database: %v", err)
+  }
+  _, err = tempDB.Exec("VACUUM")
+  tempDB.Close()
+  if err != nil {
+   return nil, fmt.Errorf("failed to vacuum database: %v", err)
+  }
+  info, _ = os.Stat(proxyDbPath)
+  if info.Size() > maxDbSize {
+   return nil, fmt.Errorf("database size (%d bytes) exceeded maximum limit (%d bytes)", info.Size(), maxDbSize)
+  }
+ }
+
+ db, err := sql.Open("sqlite3", proxyDbPath)
+ if err != nil {
+  return nil, fmt.Errorf("failed to open database: %v", err)
+ }
+
+ _, err = db.Exec("PRAGMA journal_mode=WAL")
+ if err != nil {
+  return nil, fmt.Errorf("failed to set journal mode: %v", err)
+ }
+
+ _, err = db.Exec("PRAGMA synchronous=NORMAL")
+ if err != nil {
+  return nil, fmt.Errorf("failed to set synchronous mode: %v", err)
+ }
+
+ return db, nil
+}
+
+func initSetupSql() (*sql.DB, error) {
+ db, err := setupSql()
+ if err != nil {
+  return nil, fmt.Errorf("failed to setup database: %v", err)
+ }
+
+ _, err = db.Exec(`
+  CREATE TABLE IF NOT EXISTS wrap_calls (
+   id INTEGER PRIMARY KEY,
+   content TEXT
+  )
+ `)
+ if err != nil {
+  return nil, fmt.Errorf("failed to create table: %v", err)
+ }
+
+ _, err = db.Exec(`
+  CREATE TABLE IF NOT EXISTS buffered_calls (
+   id INTEGER PRIMARY KEY,
+   content TEXT
+  )
+ `)
+ if err != nil {
+  return nil, fmt.Errorf("failed to create buffered_calls table: %v", err)
+ }
+
+ return db, nil
 }
 
 func handleHttpRequest(w http.ResponseWriter, r *http.Request) {
- if err := setupSql(); err != nil {
+ db, err := setupSql()
+ if err != nil {
+  log.Printf("Error setting up SQL: %v", err)
   http.Error(w, fmt.Sprintf("Error: %v", err), http.StatusInternalServerError)
   return
  }
+ defer db.Close()
 
  ip := r.RemoteAddr
  path := r.URL.Path
@@ -153,7 +218,7 @@ func handleHttpRequest(w http.ResponseWriter, r *http.Request) {
 
  fmt.Printf("%s [%s] %s\n", time.Now().Format("2006-01-02 15:04:05"), r.Method, path)
 
- body, err := ioutil.ReadAll(r.Body)
+ body, err := io.ReadAll(r.Body)
  if err != nil {
   http.Error(w, fmt.Sprintf("Error reading body: %v", err), http.StatusInternalServerError)
   return
@@ -174,7 +239,11 @@ func handleHttpRequest(w http.ResponseWriter, r *http.Request) {
   return
  }
 
- _, err = db.Exec("INSERT INTO wrap_calls (content) VALUES (?)", string(jsonContent))
+ if vm == nil {
+  _, err = db.Exec("INSERT INTO buffered_calls (content) VALUES (?)", string(jsonContent))
+ } else {
+  _, err = db.Exec("INSERT INTO wrap_calls (content) VALUES (?)", string(jsonContent))
+ }
  if err != nil {
   http.Error(w, fmt.Sprintf("Error inserting into database: %v", err), http.StatusInternalServerError)
   return
@@ -186,6 +255,7 @@ func handleHttpRequest(w http.ResponseWriter, r *http.Request) {
 
 func serverHeartbeat() {
  if _, err := os.Stat(proxyDbPath); os.IsNotExist(err) {
+  log.Printf("Database file does not exist")
   return
  }
 
@@ -208,14 +278,6 @@ func serverHeartbeat() {
   return
  }
 
- row := tempDB.QueryRow("SELECT content FROM wrap_calls WHERE id = (SELECT MIN(id) FROM wrap_calls)")
- var content string
- err = row.Scan(&content)
- if err != nil && err != sql.ErrNoRows {
-  log.Printf("Failed to query database: %v", err)
-  return
- }
-
  currentTime := time.Now()
  if lastVacuumTime.IsZero() {
   lastVacuumTime = currentTime
@@ -229,54 +291,184 @@ func serverHeartbeat() {
   lastVacuumTime = currentTime
  }
 
- if content != "" {
-  token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-   "data": content,
-  })
+ var idsToDelete []int
 
-  tokenString, err := token.SignedString([]byte(serverSecret))
+ if vm != nil {
+  rows, err := tempDB.Query("SELECT id, content FROM wrap_calls ORDER BY id ASC")
   if err != nil {
-   log.Printf("Failed to create JWT: %v", err)
+   log.Printf("Failed to query database: %v", err)
    return
   }
+  defer rows.Close()
 
-  client := &http.Client{}
-  req, err := http.NewRequest("POST", relayUrl+"record", strings.NewReader(tokenString))
-  if err != nil {
-   log.Printf("Failed to create request: %v", err)
-   return
+  for rows.Next() {
+   var id int
+   var content string
+   err := rows.Scan(&id, &content)
+   if err != nil {
+    log.Printf("Failed to scan row: %v", err)
+    continue
+   }
+
+   processFn, ok := goja.AssertFunction(vm.Get("process"))
+   if !ok {
+    log.Printf("process function not found in script")
+    continue
+   }
+
+   event := vm.ToValue(content)
+   emit := vm.ToValue(func(call goja.FunctionCall) goja.Value {
+    emittedContent := call.Argument(0).String()
+    _, err := tempDB.Exec("INSERT INTO buffered_calls (content) VALUES (?)", emittedContent)
+    if err != nil {
+     log.Printf("Failed to insert into buffered_calls: %v", err)
+    }
+    return goja.Undefined()
+   })
+
+   _, err = processFn(goja.Undefined(), event, emit)
+   if err != nil {
+    log.Printf("Failed to run process function: %v", err)
+    continue
+   }
+
+   idsToDelete = append(idsToDelete, id)
   }
 
-  req.Header.Set("Content-Type", "application/json")
-  req.Header.Set("Authorization", "Bearer "+relayAuthenticationBearer)
-  req.Header.Set("RF-BUCKETS", strings.Join(buckets, ","))
-
-  resp, err := client.Do(req)
-  if err != nil {
-   log.Printf("Failed to send request: %v", err)
-   return
+  if len(idsToDelete) > 0 {
+   query := fmt.Sprintf("DELETE FROM wrap_calls WHERE id IN (%s)", strings.Trim(strings.Join(strings.Fields(fmt.Sprint(idsToDelete)), ","), "[]"))
+   _, err = tempDB.Exec(query)
+   if err != nil {
+    log.Printf("Failed to delete records from wrap_calls: %v", err)
+   }
   }
-  defer resp.Body.Close()
+ }
 
-  if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-   body, _ := ioutil.ReadAll(resp.Body)
-   log.Printf("Failed to send data to relay server: %s", string(body))
+ // Process buffered_calls
+ rows, err := tempDB.Query("SELECT id, content FROM buffered_calls ORDER BY id ASC")
+ if err != nil {
+  log.Printf("Failed to query buffered_calls: %v", err)
+  return
+ }
+ defer rows.Close()
+
+ idsToDelete = []int{}
+
+ for rows.Next() {
+  var id int
+  var content string
+  err := rows.Scan(&id, &content)
+  log.Printf("Processing buffered call: id=%d, content=%s", id, content)
+  if err != nil {
+   log.Printf("Failed to scan row from buffered_calls: %v", err)
+   continue
   }
 
-  _, err = tempDB.Exec("DELETE FROM wrap_calls WHERE id = (SELECT MIN(id) FROM wrap_calls)")
+  if err := sendContent(content); err != nil {
+   log.Printf("Failed to send content: %v", err)
+  } else {
+   idsToDelete = append(idsToDelete, id)
+  }
+ }
+
+ if len(idsToDelete) > 0 {
+  query := fmt.Sprintf("DELETE FROM buffered_calls WHERE id IN (%s)", strings.Trim(strings.Join(strings.Fields(fmt.Sprint(idsToDelete)), ","), "[]"))
+  _, err = tempDB.Exec(query)
   if err != nil {
-   log.Printf("Failed to delete record from database: %v", err)
+   log.Printf("Failed to delete records from buffered_calls: %v", err)
   }
  }
 }
 
+func sendContent(content string) error {
+ fmt.Printf("Debug: Sending content: %s\n", content)
+ token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+  "data": content,
+ })
+
+ tokenString, err := token.SignedString([]byte(serverSecret))
+ if err != nil {
+  return fmt.Errorf("failed to create JWT: %v", err)
+ }
+
+ client := &http.Client{
+  Timeout: time.Second,
+ }
+ req, err := http.NewRequest("POST", relayUrl+"record", strings.NewReader(tokenString))
+ if err != nil {
+  return fmt.Errorf("failed to create request: %v", err)
+ }
+
+ req.Header.Set("Content-Type", "application/json")
+ req.Header.Set("Authorization", "Bearer "+relayAuthenticationBearer)
+ req.Header.Set("RF-BUCKETS", strings.Join(buckets, ","))
+
+ resp, err := client.Do(req)
+ if err != nil {
+  return fmt.Errorf("failed to send request: %v", err)
+ }
+ defer resp.Body.Close()
+
+ if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+  body, _ := io.ReadAll(resp.Body)
+  return fmt.Errorf("failed to send data to relay server: %s", string(body))
+ }
+
+ return nil
+}
+
+func timerHandler() {
+ if vm == nil {
+  return
+ }
+
+ db, err := setupSql()
+ if err != nil {
+  log.Printf("Error setting up SQL: %v", err)
+  return
+ }
+ defer db.Close()
+
+ timerHandlerFn, ok := goja.AssertFunction(vm.Get("timer_handler"))
+ if !ok {
+  return
+ }
+
+ emit := vm.ToValue(func(call goja.FunctionCall) goja.Value {
+  emittedContent := call.Argument(0).String()
+  _, err := db.Exec("INSERT INTO buffered_calls (content) VALUES (?)", emittedContent)
+  if err != nil {
+   log.Printf("Failed to insert into buffered_calls: %v", err)
+  }
+  return goja.Undefined()
+ })
+
+ _, err = timerHandlerFn(goja.Undefined(), emit)
+ if err != nil {
+  log.Printf("Failed to run timer_handler function: %v", err)
+ }
+}
+
 func main() {
+ db, err := initSetupSql()
+ if err != nil {
+  log.Fatalf("Error setting up SQL: %v", err)
+ }
+ db.Close()
+
  http.HandleFunc("/", handleHttpRequest)
 
  go func() {
   for {
    serverHeartbeat()
    time.Sleep(time.Duration(heartbeatIntervalMs) * time.Millisecond)
+  }
+ }()
+
+ go func() {
+  for {
+   timerHandler()
+   time.Sleep(time.Duration(hookIntervalSeconds) * time.Second)
   }
  }()
 

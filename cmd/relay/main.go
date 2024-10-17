@@ -9,9 +9,8 @@ import (
  "os"
  "path/filepath"
  "strings"
- "syscall"
  "time"
- "io/ioutil"
+ "io"
 
  _ "github.com/mattn/go-sqlite3"
 )
@@ -21,7 +20,7 @@ var (
  dbFolder           = "./"
  heartbeatIntervalMs = 1000
  dbMaxSizeKb        = 100000
- tlS               = 3600
+ tlS               = 60
  maxDbSize          = 100 * 1024 * 1024 // 100 MB
  relayAuthenticationBearer string
 )
@@ -41,7 +40,7 @@ func main() {
 
  if configPath != "" {
   log.Printf("Config path: %s", configPath)
-  data, err := ioutil.ReadFile(configPath)
+  data, err := os.ReadFile(configPath)
   if err != nil {
    log.Fatalf("Failed to read config file: %v", err)
   }
@@ -74,129 +73,22 @@ func verifyAuth(authHeader string) bool {
  return false
 }
 
-func permuteSqliteDb(db0, db1 string) error {
- fileExists := func(path string) bool {
-  _, err := os.Stat(path)
-  return !os.IsNotExist(err)
- }
-
- openIfExists := func(path string, flag int) (*os.File, error) {
-  if fileExists(path) {
-   return os.OpenFile(path, flag, 0)
-  }
-  return nil, nil
- }
-
- fd0, _ := openIfExists(db0, os.O_RDONLY)
- fd0Wal, _ := openIfExists(db0+"-wal", os.O_RDONLY)
- fd0Shm, _ := openIfExists(db0+"-shm", os.O_RDONLY)
- fd1, _ := openIfExists(db1, os.O_RDONLY)
- fd1Wal, _ := openIfExists(db1+"-wal", os.O_RDONLY)
- fd1Shm, _ := openIfExists(db1+"-shm", os.O_RDONLY)
-
- defer func() {
-  if fd0 != nil {
-   fd0.Close()
-  }
-  if fd0Wal != nil {
-   fd0Wal.Close()
-  }
-  if fd0Shm != nil {
-   fd0Shm.Close()
-  }
-  if fd1 != nil {
-   fd1.Close()
-  }
-  if fd1Wal != nil {
-   fd1Wal.Close()
-  }
-  if fd1Shm != nil {
-   fd1Shm.Close()
-  }
- }()
-
- lockFile := func(f *os.File) error {
-  if f != nil {
-   return syscall.Flock(int(f.Fd()), syscall.LOCK_EX)
-  }
-  return nil
- }
-
- unlockFile := func(f *os.File) error {
-  if f != nil {
-   return syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-  }
-  return nil
- }
-
- if err := lockFile(fd0); err != nil {
-  return err
- }
- if err := lockFile(fd0Wal); err != nil {
-  return err
- }
- if err := lockFile(fd0Shm); err != nil {
-  return err
- }
- if err := lockFile(fd1); err != nil {
-  return err
- }
- if err := lockFile(fd1Wal); err != nil {
-  return err
- }
- if err := lockFile(fd1Shm); err != nil {
-  return err
- }
-
- if fileExists(db1) {
-  os.Remove(db1)
- }
- if fileExists(db1 + "-wal") {
-  os.Remove(db1 + "-wal")
- }
- if fileExists(db1 + "-shm") {
-  os.Remove(db1 + "-shm")
- }
-
- if fileExists(db0) {
-  if err := os.Rename(db0, db1); err != nil {
-   return err
-  }
- }
- if fileExists(db0 + "-wal") {
-  if err := os.Rename(db0+"-wal", db1+"-wal"); err != nil {
-   return err
-  }
- }
- if fileExists(db0 + "-shm") {
-  if err := os.Rename(db0+"-shm", db1+"-shm"); err != nil {
-   return err
-  }
- }
-
- unlockFile(fd0)
- unlockFile(fd0Wal)
- unlockFile(fd0Shm)
- unlockFile(fd1)
- unlockFile(fd1Wal)
- unlockFile(fd1Shm)
-
- return nil
-}
-
 func handleRecord(w http.ResponseWriter, r *http.Request) {
     if !verifyAuth(r.Header.Get("Authorization")) {
+        log.Printf("Authentication failed")
         http.Error(w, "Authentication failed", http.StatusUnauthorized)
         return
     }
 
     if r.Method != http.MethodPost {
+        log.Printf("Method not allowed: %s", r.Method)
         http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
         return
     }
 
-    body, err := ioutil.ReadAll(r.Body)
+    body, err := io.ReadAll(r.Body)
     if err != nil {
+        log.Printf("Failed to read body: %v", err)
         http.Error(w, "Failed to read body", http.StatusInternalServerError)
         return
     }
@@ -205,31 +97,25 @@ func handleRecord(w http.ResponseWriter, r *http.Request) {
     for _, bucket := range buckets {
         bucket = strings.TrimSpace(bucket)
         dbFolderBucket := filepath.Join(dbFolder, bucket)
-        dbPath := filepath.Join(dbFolderBucket, "relay0.sqlite3")
-        dbPath1 := filepath.Join(dbFolderBucket, "relay1.sqlite3")
+        dbPath := filepath.Join(dbFolderBucket, "relay.sqlite3")
 
         stat, err := os.Stat(dbPath)
         if err == nil && stat.Size() > int64(dbMaxSizeKb*1024/2) {
+            log.Printf("Database size limit exceeded for bucket: %s", bucket)
             http.Error(w, "Database size limit exceeded", http.StatusInternalServerError)
             return
         }
 
-        now := time.Now().Unix()
-        if err == nil && (now-stat.ModTime().Unix()) > int64(tlS/2) {
-            if err := permuteSqliteDb(dbPath, dbPath1); err != nil {
-                http.Error(w, "Failed to permute database", http.StatusInternalServerError)
-                return
-            }
-        }
-
         err = os.MkdirAll(dbFolderBucket, 0755)
         if err != nil {
+            log.Printf("Failed to create database folder for bucket %s: %v", bucket, err)
             http.Error(w, "Failed to create database folder", http.StatusInternalServerError)
             return
         }
 
         db, err := sql.Open("sqlite3", dbPath)
         if err != nil {
+            log.Printf("Failed to open database for bucket %s: %v", bucket, err)
             http.Error(w, "Failed to open database", http.StatusInternalServerError)
             return
         }
@@ -237,12 +123,14 @@ func handleRecord(w http.ResponseWriter, r *http.Request) {
 
         _, err = db.Exec("PRAGMA journal_mode=WAL")
         if err != nil {
+            log.Printf("Failed to set journal mode for bucket %s: %v", bucket, err)
             http.Error(w, "Failed to set journal mode", http.StatusInternalServerError)
             return
         }
 
         _, err = db.Exec("PRAGMA synchronous=NORMAL")
         if err != nil {
+            log.Printf("Failed to set synchronous mode for bucket %s: %v", bucket, err)
             http.Error(w, "Failed to set synchronous mode", http.StatusInternalServerError)
             return
         }
@@ -250,18 +138,27 @@ func handleRecord(w http.ResponseWriter, r *http.Request) {
         _, err = db.Exec(`
             CREATE TABLE IF NOT EXISTS wrap_calls (
                 id INTEGER PRIMARY KEY,
-                content TEXT
+                content TEXT,
+                timestamp INTEGER
             )
         `)
         if err != nil {
+            log.Printf("Failed to create table for bucket %s: %v", bucket, err)
             http.Error(w, "Failed to create table", http.StatusInternalServerError)
             return
         }
 
-        _, err = db.Exec("INSERT INTO wrap_calls (content) VALUES (?)", string(body))
+        _, err = db.Exec("INSERT INTO wrap_calls (content, timestamp) VALUES (?, ?)", string(body), time.Now().Unix())
         if err != nil {
+            log.Printf("Failed to insert data for bucket %s: %v", bucket, err)
             http.Error(w, "Failed to insert data", http.StatusInternalServerError)
             return
+        }
+
+        // Delete expired records
+        _, err = db.Exec("DELETE FROM wrap_calls WHERE timestamp < ?", time.Now().Unix()-int64(tlS))
+        if err != nil {
+            log.Printf("Failed to delete expired records for bucket %s: %v", bucket, err)
         }
     }
 
@@ -285,7 +182,7 @@ func handleFirst(w http.ResponseWriter, r *http.Request) {
         return
     }
 
-    dbPath := filepath.Join(dbFolder, bucket, "relay0.sqlite3")
+    dbPath := filepath.Join(dbFolder, bucket, "relay.sqlite3")
 
     if _, err := os.Stat(dbPath); os.IsNotExist(err) {
         http.Error(w, "No content found", http.StatusNotFound)
@@ -360,7 +257,7 @@ func handleAcknowledge(w http.ResponseWriter, r *http.Request) {
         return
     }
 
-    dbPath := filepath.Join(dbFolder, bucket, "relay0.sqlite3")
+    dbPath := filepath.Join(dbFolder, bucket, "relay.sqlite3")
 
     if _, err := os.Stat(dbPath); os.IsNotExist(err) {
         http.Error(w, "No content found", http.StatusNotFound)
