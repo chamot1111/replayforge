@@ -7,7 +7,7 @@ on:
 
 jobs:
 
-  build:
+  build-linux:
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -19,13 +19,49 @@ jobs:
       with:
         go-version: '1.23'
 
-    - name: Build
+    - name: Build for Linux
       run: go build -v -o player-linux-amd64 ./cmd/player
+
+    - name: Upload Linux artifact
+      uses: actions/upload-artifact@v2
+      with:
+        name: player-linux-amd64
+        path: player-linux-amd64
+
+  build-macos:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.23'
+
+    - name: Build for macOS
+      run: go build -v -o player-macos-amd64 ./cmd/player
+
+    - name: Upload macOS artifact
+      uses: actions/upload-artifact@v2
+      with:
+        name: player-macos-amd64
+        path: player-macos-amd64
+
+  create-release:
+    needs: [build-linux, build-macos]
+    runs-on: ubuntu-latest
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v2
 
     - name: Create Release
       uses: softprops/action-gh-release@v2
       with:
-        files: ./player-linux-amd64
+        files: |
+          player-linux-amd64/player-linux-amd64
+          player-macos-amd64/player-macos-amd64
         name: Release ${{ github.ref_name }}
         draft: false
         prerelease: false
