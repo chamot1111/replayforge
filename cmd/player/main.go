@@ -204,9 +204,11 @@ func ensureColumnExists(table, column, dataType string) error {
 	}
 	return nil
 }
-
 func executeWriteDBOperation(method, path string, body []byte) error {
-	table := strings.TrimPrefix(path, "/")
+	if !strings.HasPrefix(path, "/rpf-db") {
+		return nil
+	}
+	table := strings.TrimPrefix(path, "/rpf-db/")
 	err := ensureTableExists(table)
 	if err != nil {
 		return err
