@@ -86,6 +86,16 @@ func main() {
 		log.Fatal("At least one bucket authentication is required")
 	}
 
+	log.Printf("Configuration:")
+	log.Printf("  Config Path: %s", configPath)
+	log.Printf("  DB Max Size: %d KB", dbMaxSizeKb)
+	log.Printf("  Port: %d", port)
+	log.Printf("  Time to Live: %d seconds", tlS)
+	log.Printf("  Buckets:")
+	for bucket := range bucketAuth {
+		log.Printf("    - %s", bucket)
+	}
+
 	// Main server loop would go here
 	http.HandleFunc("/record", handleRecord)
 	http.HandleFunc("/first", handleFirst)
