@@ -32,6 +32,7 @@ var (
 	scriptPath                string
 	vm                        *goja.Runtime
 	hookIntervalSeconds       int
+	port                      string
 )
 
 func init() {
@@ -41,6 +42,7 @@ func init() {
 	flag.StringVar(&relayAuthenticationBearer, "a", "", "Relay authentication bearer token")
 	flag.StringVar(&scriptPath, "script", "", "Path to JavaScript script")
 	flag.IntVar(&hookIntervalSeconds, "hook-interval", 60, "Interval in seconds for timer_handler")
+	flag.StringVar(&port, "p", "8080", "Port to listen on")
 	flag.Func("b", "Bucket name (can be specified multiple times)", func(s string) error {
 		buckets = append(buckets, s)
 		return nil
@@ -90,6 +92,11 @@ func init() {
 		if hookIntervalSeconds == 60 {
 			if intervalFromConfig, ok := config["hookIntervalSeconds"].(float64); ok {
 				hookIntervalSeconds = int(intervalFromConfig)
+			}
+		}
+		if port == "8080" {
+			if portFromConfig, ok := config["port"].(string); ok {
+				port = portFromConfig
 			}
 		}
 	}
@@ -179,21 +186,21 @@ func initSetupSql() (*sql.DB, error) {
 	}
 
 	_, err = db.Exec(`
-  CREATE TABLE IF NOT EXISTS wrap_calls (
-   id INTEGER PRIMARY KEY,
-   content TEXT
-  )
- `)
+		CREATE TABLE IF NOT EXISTS wrap_calls (
+			id INTEGER PRIMARY KEY,
+			content TEXT
+		)
+	`)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create table: %v", err)
 	}
 
 	_, err = db.Exec(`
-  CREATE TABLE IF NOT EXISTS buffered_calls (
-   id INTEGER PRIMARY KEY,
-   content TEXT
-  )
- `)
+		CREATE TABLE IF NOT EXISTS buffered_calls (
+			id INTEGER PRIMARY KEY,
+			content TEXT
+		)
+	`)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create buffered_calls table: %v", err)
 	}
@@ -473,5 +480,6 @@ func main() {
 		}
 	}()
 
-	log.Fatal(http.ListenAndServe("localhost:8080", nil))
+	log.Printf("Listening on port %s", port)
+	log.Fatal(http.ListenAndServe(":"+port, nil))
 }
