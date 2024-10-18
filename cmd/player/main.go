@@ -174,13 +174,12 @@ func loadTableSchemas() {
 
 func ensureTableExists(table string) error {
 	if _, exists := tableSchemas[table]; !exists {
-		query := fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s (id INTEGER PRIMARY KEY AUTOINCREMENT)", table)
+		query := fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s ()", table)
 		_, err := db.Exec(query)
 		if err != nil {
 			return fmt.Errorf("failed to create table %s: %v", table, err)
 		}
 		tableSchemas[table] = make(map[string]string)
-		tableSchemas[table]["id"] = "INTEGER"
 	}
 	return nil
 }
@@ -194,7 +193,7 @@ func ensureColumnExists(table, column, dataType string) error {
 		}
 		tableSchemas[table][column] = dataType
 
-		if strings.HasPrefix(column, "_i") || strings.HasPrefix(column, "_idx") || strings.HasPrefix(column, "_index") {
+		if strings.HasPrefix(column, "_i") || strings.HasPrefix(column, "_idx") || strings.HasPrefix(column, "_index") || strings.HasPrefix(column, "id_") || strings.HasSuffix(column, "_id") || column == "id" {
 			indexQuery := fmt.Sprintf("CREATE INDEX IF NOT EXISTS idx_%s_%s ON %s(%s)", table, column, table, column)
 			_, err = db.Exec(indexQuery)
 			if err != nil {
@@ -204,6 +203,7 @@ func ensureColumnExists(table, column, dataType string) error {
 	}
 	return nil
 }
+
 func executeWriteDBOperation(method, path string, body []byte) error {
 	if !strings.HasPrefix(path, "/rpf-db") {
 		return nil
