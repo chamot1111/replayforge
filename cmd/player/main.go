@@ -187,6 +187,9 @@ func ensureTableExists(table string) error {
 func ensureColumnExists(table, column, dataType string) error {
 	if _, exists := tableSchemas[table][column]; !exists {
 		query := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, dataType)
+		if column == "id" {
+			query += " PRIMARY KEY"
+		}
 		_, err := db.Exec(query)
 		if err != nil {
 			return fmt.Errorf("failed to add column %s to table %s: %v", column, table, err)
@@ -228,9 +231,13 @@ func executeWriteDBOperation(method, path string, body []byte) error {
 
 		columns := make([]string, 0, len(data))
 		values := make([]interface{}, 0, len(data))
+		placeholders := make([]string, 0, len(data))
+		updateStatements := make([]string, 0, len(data))
 		for k, v := range data {
 			columns = append(columns, k)
 			values = append(values, v)
+			placeholders = append(placeholders, "?")
+			updateStatements = append(updateStatements, fmt.Sprintf("%s = ?", k))
 			dataType := "TEXT"
 			switch v.(type) {
 			case int, int64:
@@ -245,13 +252,14 @@ func executeWriteDBOperation(method, path string, body []byte) error {
 				return err
 			}
 		}
-		query := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)",
+		query := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s) ON CONFLICT(id) DO UPDATE SET %s",
 			table,
 			strings.Join(columns, ", "),
-			strings.Repeat("?, ", len(columns)-1)+"?")
-		_, err = db.Exec(query, values...)
+			strings.Join(placeholders, ", "),
+			strings.Join(updateStatements, ", "))
+		_, err = db.Exec(query, append(values, values...)...)
 		if err != nil {
-			return fmt.Errorf("failed to insert: %v", err)
+			return fmt.Errorf("failed to insert or update: %v", err)
 		}
 	case "PUT":
 		var data map[string]interface{}
