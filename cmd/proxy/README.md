@@ -28,6 +28,7 @@ The service can be configured using command-line flags or a JSON configuration f
 - `-s`: Server secret
 - `-a`: Relay authentication bearer token
 - `-b`: Bucket name (can be specified multiple times)
+- `-p`: Listen port
 - `-script`: Path to JavaScript script
 - `-hook-interval`: Interval in seconds for timer_handler (default: 60)
 
@@ -42,7 +43,8 @@ Alternatively, you can use a JSON configuration file. Example:
   "relayAuthenticationBearer": "your-bearer-token",
   "buckets": ["bucket1", "bucket2"],
   "scriptPath": "/path/to/your/script.js",
-  "hookIntervalSeconds": 30
+  "hookIntervalSeconds": 30,
+  "port": 8080
 }
 ```
 
