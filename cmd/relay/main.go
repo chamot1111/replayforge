@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -18,20 +19,25 @@ import (
 var (
 	configPath          string
 	dbFolder            = "./"
-	heartbeatIntervalMs = 1000
 	dbMaxSizeKb         int
-	tlS                 = 60
+	tlS                 int
 	maxDbSize           = 100 * 1024 * 1024 // 100 MB
 	bucketAuth          map[string]string
+	port                int
 )
 
 type Config struct {
-	BucketAuth map[string]string `json:"bucketAuth"`
+	BucketAuth   map[string]string `json:"bucketAuth"`
+	DbMaxSizeKb  int               `json:"dbMaxSizeKb"`
+	Port         int               `json:"port"`
+	TlS          int               `json:"tlS"`
 }
 
 func init() {
 	flag.StringVar(&configPath, "c", "", "Path to config file")
 	flag.IntVar(&dbMaxSizeKb, "m", 100000, "Maximum database size in KB")
+	flag.IntVar(&port, "p", 8081, "Port to listen on")
+	flag.IntVar(&tlS, "t", 0, "Time to live in seconds for records (0 for no delay)")
 
 	// Add a new flag for bucket authentication
 	var bucketAuthArg string
@@ -65,6 +71,15 @@ func main() {
 			log.Fatalf("Failed to parse config file: %v", err)
 		}
 		bucketAuth = config.BucketAuth
+		if config.DbMaxSizeKb > 0 {
+			dbMaxSizeKb = config.DbMaxSizeKb
+		}
+		if config.Port > 0 {
+			port = config.Port
+		}
+		if config.TlS >= 0 {
+			tlS = config.TlS
+		}
 	}
 
 	if len(bucketAuth) == 0 {
@@ -76,7 +91,7 @@ func main() {
 	http.HandleFunc("/first", handleFirst)
 	http.HandleFunc("/acknowledge", handleAcknowledge)
 
-	log.Fatal(http.ListenAndServe(":8081", nil))
+	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", port), nil))
 }
 
 func verifyAuth(authHeader, bucket string) bool {
@@ -171,10 +186,12 @@ func handleRecord(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Delete expired records
-		_, err = db.Exec("DELETE FROM wrap_calls WHERE timestamp < ?", time.Now().Unix()-int64(tlS))
-		if err != nil {
-			log.Printf("Failed to delete expired records for bucket %s: %v", bucket, err)
+		// Delete expired records if tlS > 0
+		if tlS > 0 {
+			_, err = db.Exec("DELETE FROM wrap_calls WHERE timestamp < ?", time.Now().Unix()-int64(tlS))
+			if err != nil {
+				log.Printf("Failed to delete expired records for bucket %s: %v", bucket, err)
+			}
 		}
 	}
 
