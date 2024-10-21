@@ -169,13 +169,12 @@ func (l *LogFileSource) readLogFile() {
 			file.Close()
 			return
 		}
-
 		if l.RemoveAfterSecs > 0 && eofReached && time.Since(eofTime) >= time.Duration(l.RemoveAfterSecs)*time.Second {
 			file.Close()
-			if err := os.Remove(l.FilePath); err != nil {
-				log.Printf("Failed to remove log file %s: %v", l.FilePath, err)
+			if err := os.Truncate(l.FilePath, 0); err != nil {
+				log.Printf("Failed to truncate log file %s: %v", l.FilePath, err)
 			} else {
-				log.Printf("Removed log file %s after %d seconds of inactivity", l.FilePath, l.RemoveAfterSecs)
+				log.Printf("Truncated log file %s after %d seconds of inactivity", l.FilePath, l.RemoveAfterSecs)
 				return
 			}
 		}
@@ -186,10 +185,10 @@ func (l *LogFileSource) readLogFile() {
 				log.Printf("Failed to get file info for %s: %v", l.FilePath, err)
 			} else if fileInfo.Size() >= l.RemoveMaxFileSize {
 				file.Close()
-				if err := os.Remove(l.FilePath); err != nil {
-					log.Printf("Failed to remove log file %s: %v", l.FilePath, err)
+				if err := os.Truncate(l.FilePath, 0); err != nil {
+					log.Printf("Failed to truncate log file %s: %v", l.FilePath, err)
 				} else {
-					log.Printf("Removed log file %s after reaching max size of %d bytes", l.FilePath, l.RemoveMaxFileSize)
+					log.Printf("Truncated log file %s after reaching max size of %d bytes", l.FilePath, l.RemoveMaxFileSize)
 					return
 				}
 			}
