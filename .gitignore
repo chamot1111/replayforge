@@ -58,3 +58,4 @@ node_modules/
 dist/
 
 /TODO.md
+/git-local.sh

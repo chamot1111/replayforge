@@ -10,9 +10,10 @@ The proxy server intercepts HTTP requests, stores them in a local SQLite databas
 
 Key features:
 - Intercepts and stores HTTP requests
-- Supports custom JavaScript processing
+- Supports custom lua processing
 - Forwards processed requests to a relay server
 - Periodic database cleanup and maintenance
+- Support Tailscale network
 
 ### Relay Server
 
@@ -31,11 +32,12 @@ Key features:
 - Retrieves requests from the relay server
 - Can operate in database mode or forward requests to a target host
 - Provides a simple HTTP API for querying stored requests
+- Supports custom lua processing
 - Supports basic authentication for secure access
 
 ## Setup and Configuration
 
-Configure each component using command-line flags or configuration files. Refer to the usage section of each component for details.
+Configure each component using configuration files. Refer to the usage section of each component for details.
 
 ## Usage
 
