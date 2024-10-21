@@ -90,6 +90,6 @@ jobs:
           macos-amd64-binaries/relay-macos-amd64
         name: Release ${{ github.ref_name }}
         draft: false
-        prerelease: false
+        prerelease: true
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
