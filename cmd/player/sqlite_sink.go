@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"strconv"
 	"github.com/chamot1111/replayforge/playerplugin"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -18,6 +19,7 @@ type SqliteSink struct {
 	ListenAddr   string
 	StaticDir    string
 	ID           string
+	ExposedPort  int
 }
 
 func (s *SqliteSink) Init(config playerplugin.SinkConfig) error {
@@ -36,6 +38,12 @@ func (s *SqliteSink) Init(config playerplugin.SinkConfig) error {
 	listenPort, ok := params["listen_port"].(string)
 	if !ok {
 		return fmt.Errorf("listen_port not found in params or not a string")
+	} else {
+		port, err := strconv.Atoi(listenPort)
+		if err != nil {
+			return fmt.Errorf("failed to parse listen_port as integer: %v", err)
+		}
+		s.ExposedPort = port
 	}
 
 	listenHost, ok := params["listen_host"].(string)
@@ -350,4 +358,8 @@ func (s *SqliteSink) loadTableSchemas() {
 
 func (s *SqliteSink) GetID() string {
  return s.ID
+}
+
+func (s *SqliteSink) GetExposedPort() (int, bool) {
+ return s.ExposedPort, true
 }

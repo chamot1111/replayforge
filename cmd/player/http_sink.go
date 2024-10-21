@@ -68,3 +68,7 @@ func (s *HttpSink) Close() error {
 func (s *HttpSink) GetID() string {
  return s.ID
 }
+
+func (s *HttpSink) GetExposedPort() (int, bool) {
+    return 0, false
+}

@@ -7,7 +7,7 @@ import (
 type BaseSink struct {
 	ID         string `json:"id"`
 	Type       string `json:"type"`
-	BucketName string `json:"bucketName"`
+	Name string `json:"bucketName"`
 }
 
 type SinkConfig struct {
@@ -22,6 +22,8 @@ type Sink interface {
 	Start() error
 	Execute(method, path string, body []byte, headers map[string]interface{}, params map[string]interface{}) error
 	Close() error
+	GetID() string
+	GetExposedPort() (int, bool)
 }
 
 type SinkPlugin interface {

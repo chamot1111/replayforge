@@ -71,3 +71,7 @@ func (s *LogSink) Close() error {
 func (s *LogSink) GetID() string {
  return s.ID
 }
+
+func (s *LogSink) GetExposedPort() (int, bool) {
+ return 0, false
+}

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 	"flag"
+	"net/http/httputil"
+	"net/url"
 	"github.com/chamot1111/replayforge/playerplugin"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -48,6 +50,8 @@ var (
 	sinks               map[string]playerplugin.Sink
 	useTsnet            bool
 	tsnetHostname       string
+	globalExposedPort   int
+	globalListenAddress string
 )
 
 func init() {
@@ -219,6 +223,13 @@ func init() {
 		relayUrl += "/"
 	}
 
+	if exposedPort, ok := config["exposedPort"].(float64); ok {
+		globalExposedPort = int(exposedPort)
+	}
+	if listenAddress, ok := config["listenAddress"].(string); ok {
+		globalListenAddress = listenAddress
+	}
+
 	for _, source := range sources {
 		fmt.Printf("Source: %s, RelayAuthenticationBearer: %s\n", source.Name, source.RelayAuthenticationBearer)
 	}
@@ -358,6 +369,31 @@ func main() {
 		client = s.HTTPClient()
 	} else {
 		client = &http.Client{}
+	}
+
+	// Create a reverse proxy if globalExposedPort and globalListenAddress are defined
+	if globalExposedPort != 0 && globalListenAddress != "" {
+		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			sinkID := strings.TrimPrefix(r.URL.Path, "/")
+			if sink, ok := sinks[sinkID]; ok {
+				if port, exposed := sink.GetExposedPort(); exposed {
+					// target := fmt.Sprintf("http://localhost:%d", port)
+					proxy := httputil.NewSingleHostReverseProxy(&url.URL{Scheme: "http", Host: fmt.Sprintf("localhost:%d", port)})
+					proxy.ServeHTTP(w, r)
+				} else {
+					http.Error(w, "Sink does not expose a port", http.StatusNotFound)
+				}
+			} else {
+				http.NotFound(w, r)
+			}
+		})
+
+		go func() {
+			fmt.Printf("Starting reverse proxy on %s:%d\n", globalListenAddress, globalExposedPort)
+			if err := http.ListenAndServe(fmt.Sprintf("%s:%d", globalListenAddress, globalExposedPort), nil); err != nil {
+				fmt.Printf("Error starting reverse proxy: %v\n", err)
+			}
+		}()
 	}
 
 	ticker := time.NewTicker(time.Duration(heartbeatIntervalMs) * time.Millisecond)
