@@ -17,6 +17,7 @@ type SqliteSink struct {
 	TableSchemas map[string]map[string]string
 	ListenAddr   string
 	StaticDir    string
+	ID           string
 }
 
 func (s *SqliteSink) Init(config playerplugin.SinkConfig) error {
@@ -345,4 +346,8 @@ func (s *SqliteSink) loadTableSchemas() {
 			s.TableSchemas[tableName][name] = dataType
 		}
 	}
+}
+
+func (s *SqliteSink) GetID() string {
+ return s.ID
 }

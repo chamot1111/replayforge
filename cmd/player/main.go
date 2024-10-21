@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"flag"
 	"github.com/chamot1111/replayforge/playerplugin"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -16,20 +17,25 @@ import (
 	"github.com/vjeantet/grok"
 )
 
-type Bucket struct {
+type Source struct {
 	Name                      string
 	RelayAuthenticationBearer string
-	Sink                      playerplugin.Sink
 	LuaVM                     *lua.State
+	Sinks                     []playerplugin.Sink
 }
 
-type BucketConfig struct {
-	Name                      string          `json:"name"`
-	RelayAuthenticationBearer string          `json:"relayAuthenticationBearer"`
-	SinkType                  string          `json:"sinkType"`
-	ID                        string          `json:"id"`
-	Params                    json.RawMessage `json:"params"`
-	LuaScript                 string          `json:"luaScript"`
+type SourceConfig struct {
+	Name                      string   `json:"name"`
+	RelayAuthenticationBearer string   `json:"relayAuthenticationBearer"`
+	LuaScript                 string   `json:"luaScript"`
+	Sinks                     []string `json:"sinks"`
+}
+
+type SinkConfig struct {
+	Name     string          `json:"name"`
+	Type     string          `json:"type"`
+	ID       string          `json:"id"`
+	Params   json.RawMessage `json:"params"`
 }
 
 var (
@@ -38,13 +44,15 @@ var (
 	heartbeatIntervalMs = 100
 	maxDbSize           = 100 * 1024 * 1024 // 100 MB
 	relayUrl            string
-	buckets             []Bucket
+	sources             []Source
+	sinks               map[string]playerplugin.Sink
 	useTsnet            bool
 	tsnetHostname       string
 )
 
 func init() {
-	configPath = "config.json"
+	flag.StringVar(&configPath, "c", "config.json", "Path to the configuration file")
+	flag.Parse()
 	fmt.Printf("Config path: %s\n", configPath)
 	configData, err := os.ReadFile(configPath)
 	if err != nil {
@@ -63,46 +71,65 @@ func init() {
 		tsnetHostname = tsnetConfig["hostname"].(string)
 	}
 
-	var bucketsConfig []BucketConfig
-	bucketsJSON, err := json.Marshal(config["buckets"])
-	if err != nil {
-		panic(fmt.Sprintf("Failed to marshal buckets config: %v", err))
-	}
-	err = json.Unmarshal(bucketsJSON, &bucketsConfig)
-	if err != nil {
-		panic(fmt.Sprintf("Failed to unmarshal buckets config: %v", err))
-	}
-
-	for _, bc := range bucketsConfig {
-		bucket := Bucket{
-			Name:                      bc.Name,
-			RelayAuthenticationBearer: bc.RelayAuthenticationBearer,
+	var sourcesConfig []SourceConfig
+	if sourcesData, ok := config["sources"].([]interface{}); ok {
+		for _, sourceData := range sourcesData {
+			if sourceMap, ok := sourceData.(map[string]interface{}); ok {
+				var sc SourceConfig
+				sc.Name = sourceMap["name"].(string)
+				sc.RelayAuthenticationBearer = sourceMap["relayAuthenticationBearer"].(string)
+				if luaScript, ok := sourceMap["luaScript"].(string); ok {
+					sc.LuaScript = luaScript
+				} else if sinks, ok := sourceMap["sinks"].([]interface{}); ok {
+					for _, sink := range sinks {
+						sc.Sinks = append(sc.Sinks, sink.(string))
+					}
+				} else {
+					panic(fmt.Sprintf("Source %s must have either 'luaScript' or 'sinks' defined", sc.Name))
+				}
+				sourcesConfig = append(sourcesConfig, sc)
+			}
 		}
+	} else {
+		panic(fmt.Sprintf("Failed to parse sources from config. Current type: %T", config["sources"]))
+	}
 
+	var sinksConfig []SinkConfig
+	sinksJSON, err := json.Marshal(config["sinks"])
+	if err != nil {
+		panic(fmt.Sprintf("Failed to marshal sinks config: %v", err))
+	}
+	err = json.Unmarshal(sinksJSON, &sinksConfig)
+	if err != nil {
+		panic(fmt.Sprintf("Failed to unmarshal sinks config: %v", err))
+	}
+	sinks = make(map[string]playerplugin.Sink)
+	for _, sc := range sinksConfig {
 		var sink playerplugin.Sink
-		switch bc.SinkType {
+		switch sc.Type {
 		case "http":
 			sink = &HttpSink{}
 		case "db":
 			sink = &SqliteSink{}
+		case "log":
+			sink = &LogSink{}
 		default:
 			// Try to load a plugin for unknown sink types
-			pluginPath := fmt.Sprintf("./%s_sink.so", bc.SinkType)
+			pluginPath := fmt.Sprintf("./%s_sink.so", sc.Type)
 			loadedSink, err := LoadSinkPlugin(pluginPath)
 			if err != nil {
-				panic(fmt.Sprintf("Failed to load sink plugin for type %s: %v", bc.SinkType, err))
+				panic(fmt.Sprintf("Failed to load sink plugin for type %s: %v", sc.Type, err))
 			}
 			sink = loadedSink
 		}
 
 		sinkConfig := playerplugin.SinkConfig{
 			BaseSink: playerplugin.BaseSink{
-				ID:         bc.ID,
-				Type:       bc.SinkType,
-				BucketName: bucket.Name,
+				ID:   sc.ID,
+				Type: sc.Type,
+				Name: sc.Name,
 			},
-			Params:    bc.Params,
-			LuaScript: bc.LuaScript,
+			Params: sc.Params,
 		}
 
 		if err := sink.Init(sinkConfig); err != nil {
@@ -113,15 +140,26 @@ func init() {
 			panic(fmt.Sprintf("Failed to start sink: %v", err))
 		}
 
-		bucket.Sink = sink
+		sinks[sc.Name] = sink
+	}
+
+	for sinkName, _ := range sinks {
+		fmt.Printf("Sink: %s\n", sinkName)
+	}
+
+	for _, sc := range sourcesConfig {
+		source := Source{
+			Name:                      sc.Name,
+			RelayAuthenticationBearer: sc.RelayAuthenticationBearer,
+		}
 
 		// Initialize Lua VM
-		bucket.LuaVM = lua.NewState()
-		lua.OpenLibraries(bucket.LuaVM)
+		source.LuaVM = lua.NewState()
+		lua.OpenLibraries(source.LuaVM)
 
 		// Register grok parser
 		g, _ := grok.NewWithConfig(&grok.Config{NamedCapturesOnly: true})
-		bucket.LuaVM.Register("grok_parse", func(l *lua.State) int {
+		source.LuaVM.Register("grok_parse", func(l *lua.State) int {
 			pattern, _ := l.ToString(1)
 			text, _ := l.ToString(2)
 			values, err := g.Parse(pattern, text)
@@ -138,29 +176,39 @@ func init() {
 			}
 			return 1
 		})
-
 		// Load the Lua script or use default script
-		if bc.LuaScript == "" {
-			bc.LuaScript = `
-				function process(content, emit)
-					emit(content)
-				end
-			`
+		if sc.LuaScript == "" {
+			// Create default Lua script that emits content to all configured sinks
+			defaultScript := "function process(content, emit)\n"
+			for _, sinkName := range sc.Sinks {
+				defaultScript += fmt.Sprintf("    emit('%s', content)\n", sinkName)
+			}
+			defaultScript += "end"
+			sc.LuaScript = defaultScript
 		}
-		if err := lua.DoString(bucket.LuaVM, bc.LuaScript); err != nil {
-			panic(fmt.Sprintf("Failed to load Lua script for bucket %s: %v", bucket.Name, err))
+		if err := lua.DoString(source.LuaVM, sc.LuaScript); err != nil {
+			panic(fmt.Sprintf("Failed to load Lua script for source %s: %v", source.Name, err))
 		}
 
 		// Call init function if it exists
-		bucket.LuaVM.Global("init")
-		if bucket.LuaVM.IsFunction(-1) {
-			if err := bucket.LuaVM.ProtectedCall(0, 0, 0); err != nil {
-				panic(fmt.Sprintf("Failed to call init function for bucket %s: %v", bucket.Name, err))
+		source.LuaVM.Global("init")
+		if source.LuaVM.IsFunction(-1) {
+			if err := source.LuaVM.ProtectedCall(0, 0, 0); err != nil {
+				panic(fmt.Sprintf("Failed to call init function for source %s: %v", source.Name, err))
 			}
 		}
-		bucket.LuaVM.Pop(1)
+		source.LuaVM.Pop(1)
 
-		buckets = append(buckets, bucket)
+		// Attach sinks
+		for _, sinkName := range sc.Sinks {
+			if sink, ok := sinks[sinkName]; ok {
+				source.Sinks = append(source.Sinks, sink)
+			} else {
+				panic(fmt.Sprintf("Sink %s not found for source %s", sinkName, source.Name))
+			}
+		}
+
+		sources = append(sources, source)
 	}
 
 	if relayUrl == "" {
@@ -170,17 +218,21 @@ func init() {
 	if relayUrl != "" && !strings.HasSuffix(relayUrl, "/") {
 		relayUrl += "/"
 	}
+
+	for _, source := range sources {
+		fmt.Printf("Source: %s, RelayAuthenticationBearer: %s\n", source.Name, source.RelayAuthenticationBearer)
+	}
 }
 
-func OnServerHeartbeat(bucket Bucket, client *http.Client) {
+func OnServerHeartbeat(source Source, client *http.Client) {
 	req, err := http.NewRequest("GET", relayUrl+"first", nil)
 	if err != nil {
 		fmt.Printf("Error creating request: %v\n", err)
 		return
 	}
 
-	req.Header.Set("RF-BUCKET", bucket.Name)
-	req.Header.Set("Authorization", "Bearer "+bucket.RelayAuthenticationBearer)
+	req.Header.Set("RF-BUCKET", source.Name)
+	req.Header.Set("Authorization", "Bearer "+source.RelayAuthenticationBearer)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -217,13 +269,14 @@ func OnServerHeartbeat(bucket Bucket, client *http.Client) {
 		return
 	}
 	// Process the event through Lua VM
-	bucket.LuaVM.Global("process")
-	if bucket.LuaVM.IsFunction(-1) {
-		bucket.LuaVM.PushString(content)
-		bucket.LuaVM.PushGoFunction(func(l *lua.State) int {
-			emittedContent, _ := l.ToString(-1)
+	source.LuaVM.Global("process")
+	if source.LuaVM.IsFunction(-1) {
+		source.LuaVM.PushString(content)
+		source.LuaVM.PushGoFunction(func(l *lua.State) int {
+			sinkId, _ := l.ToString(1)
+			emittedContent, _ := l.ToString(2)
 
-			fmt.Printf("Processed content: %s\n", emittedContent)
+			fmt.Printf("Processed content for sink %s: %s\n", sinkId, emittedContent)
 
 			// Parse the processed content
 			var decodedData map[string]interface{}
@@ -239,22 +292,31 @@ func OnServerHeartbeat(bucket Bucket, client *http.Client) {
 			headers, _ := decodedData["headers"].(map[string]interface{})
 			params, _ := decodedData["params"].(map[string]interface{})
 
-			err = bucket.Sink.Execute(method, path, []byte(requestBody), headers, params)
-			if err != nil {
-				fmt.Printf("Error executing sink operation for bucket %s: %v\n", bucket.Name, err)
-				// Don't return, continue to the next iteration
+			sinkFound := false
+			for _, sink := range source.Sinks {
+				if sink.GetID() == sinkId {
+					err = sink.Execute(method, path, []byte(requestBody), headers, params)
+					if err != nil {
+						fmt.Printf("Error executing sink operation for source %s and sink %s: %v\n", source.Name, sinkId, err)
+					}
+					sinkFound = true
+					break
+				}
+			}
+			if !sinkFound {
+				fmt.Printf("Error: Sink with ID %s not found for source %s\n", sinkId, source.Name)
 			}
 
 			return 0
 		})
 
-		if err := bucket.LuaVM.ProtectedCall(2, 1, 0); err != nil {
-			fmt.Printf("Error calling process function for bucket %s: %v\n", bucket.Name, err)
+		if err := source.LuaVM.ProtectedCall(2, 1, 0); err != nil {
+			fmt.Printf("Error calling process function for source %s: %v\n", source.Name, err)
 		}
 
 	} else {
-		fmt.Printf("Error: 'process' function not found in Lua script for bucket %s\n", bucket.Name)
-		bucket.LuaVM.Pop(1)
+		fmt.Printf("Error: 'process' function not found in Lua script for source %s\n", source.Name)
+		source.LuaVM.Pop(1)
 	}
 
 	// Acknowledge relay server
@@ -264,8 +326,8 @@ func OnServerHeartbeat(bucket Bucket, client *http.Client) {
 		fmt.Printf("Error creating acknowledgment request: %v\n", err)
 		return
 	}
-	ackReq.Header.Set("RF-BUCKET", bucket.Name)
-	ackReq.Header.Set("Authorization", "Bearer "+bucket.RelayAuthenticationBearer)
+	ackReq.Header.Set("RF-BUCKET", source.Name)
+	ackReq.Header.Set("Authorization", "Bearer "+source.RelayAuthenticationBearer)
 
 	ackResp, err := client.Do(ackReq)
 	if err != nil {
@@ -302,8 +364,8 @@ func main() {
 	defer ticker.Stop()
 
 	for range ticker.C {
-		for _, bucket := range buckets {
-			OnServerHeartbeat(bucket, client)
+		for _, source := range sources {
+			OnServerHeartbeat(source, client)
 		}
 	}
 }

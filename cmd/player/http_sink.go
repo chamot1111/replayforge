@@ -12,6 +12,7 @@ import (
 type HttpSink struct {
 	TargetHost string
 	BucketName string
+	ID string
 }
 
 func (s *HttpSink) Init(config playerplugin.SinkConfig) error {
@@ -23,7 +24,8 @@ func (s *HttpSink) Init(config playerplugin.SinkConfig) error {
 		return fmt.Errorf("failed to parse sink params: %v", err)
 	}
 	s.TargetHost = params.TargetHost
-	s.BucketName = config.BucketName
+	s.BucketName = config.Name
+	s.ID = config.ID
 	return nil
 }
 
@@ -61,4 +63,8 @@ func (s *HttpSink) Execute(method, path string, body []byte, headers map[string]
 func (s *HttpSink) Close() error {
 	// No need to close anything for HttpSink
 	return nil
+}
+
+func (s *HttpSink) GetID() string {
+ return s.ID
 }

@@ -5,3 +5,4 @@ dist/
 /player.sqlite3
 /config.json
 /olapdb*
+/new-config.json
