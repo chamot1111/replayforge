@@ -11,7 +11,7 @@ import (
 
 type HTTPSource struct {
     BaseSource
-    ListenPort   string
+    ListenPort   int
     DatabasePath string
     EventChan chan<- EventSource
 }
@@ -19,7 +19,7 @@ type HTTPSource struct {
 func (h *HTTPSource) Init(config SourceConfig, eventChan chan<- EventSource) error {
     var sourceConfig struct {
         Params struct {
-            ListenPort string `json:"listenPort"`
+            ListenPort int `json:"listenPort"`
         } `json:"params"`
     }
     if err := json.Unmarshal(config.Params, &sourceConfig.Params); err != nil {
@@ -34,7 +34,7 @@ func (h *HTTPSource) Init(config SourceConfig, eventChan chan<- EventSource) err
 
 func (h *HTTPSource) Start() error {
     db, err := setupSql(h.DatabasePath, true)
-    if err != nil {
+    if (err != nil) {
         return fmt.Errorf("error setting up SQL for source %s: %v", h.ID, err)
     }
     defer db.Close()
@@ -42,12 +42,12 @@ func (h *HTTPSource) Start() error {
     mux := http.NewServeMux()
     mux.HandleFunc("/", h.handleRequest)
     server := &http.Server{
-        Addr:    ":" + h.ListenPort,
+        Addr:    fmt.Sprintf(":%d", h.ListenPort),
         Handler: mux,
     }
 
     go func() {
-        log.Printf("HTTP source listening on port %s", h.ListenPort)
+        log.Printf("HTTP source listening on port %d", h.ListenPort)
         if err := server.ListenAndServe(); err != nil {
             log.Printf("HTTP server error: %v", err)
         }
