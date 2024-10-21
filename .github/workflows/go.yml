@@ -1,0 +1,95 @@
+name: Go
+
+on:
+  push:
+    tags:
+      - '*'
+
+jobs:
+
+  build-linux:
+    runs-on: ubuntu-20.04
+    permissions:
+      contents: write
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.23'
+
+    - name: Build for Linux
+      run: |
+        go build -ldflags "-s -w" -v -o player-linux-amd64 ./cmd/player
+        go build -ldflags "-s -w" -v -o proxy-linux-amd64 ./cmd/proxy
+        go build -ldflags "-s -w" -v -o relay-linux-amd64 ./cmd/relay
+
+    - name: Run UPX
+      uses: crazy-max/ghaction-upx@v3
+      with:
+        version: latest
+        files: |
+          ./proxy-linux-amd64
+          ./relay-linux-amd64
+          ./player-linux-amd64
+        args: -fq --best --lzma
+
+    - name: Upload Linux artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: linux-amd64-binaries
+        path: |
+          player-linux-amd64
+          proxy-linux-amd64
+          relay-linux-amd64
+
+  build-macos:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.23'
+
+    - name: Build for macOS
+      run: |
+        go build -ldflags "-s -w" -v -o player-macos-amd64 ./cmd/player
+        go build -ldflags "-s -w" -v -o proxy-macos-amd64 ./cmd/proxy
+        go build -ldflags "-s -w" -v -o relay-macos-amd64 ./cmd/relay
+
+    - name: Upload macOS artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: macos-amd64-binaries
+        path: |
+          player-macos-amd64
+          proxy-macos-amd64
+          relay-macos-amd64
+
+  create-release:
+    needs: [build-linux, build-macos]
+    runs-on: ubuntu-latest
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: |
+          linux-amd64-binaries/player-linux-amd64
+          linux-amd64-binaries/proxy-linux-amd64
+          linux-amd64-binaries/relay-linux-amd64
+          macos-amd64-binaries/player-macos-amd64
+          macos-amd64-binaries/proxy-macos-amd64
+          macos-amd64-binaries/relay-macos-amd64
+        name: Release ${{ github.ref_name }}
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

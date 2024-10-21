@@ -1,0 +1,7 @@
+/player
+
+dist/
+
+/player.sqlite3
+/config.json
+/olapdb*
