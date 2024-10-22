@@ -18,6 +18,10 @@ import (
 	"tailscale.com/tsnet"
 )
 
+const (
+ relayURLSpecialValue = ":dbg>stdout:"
+)
+
 type BaseSource struct {
 	ID              string `json:"id"`
 	Type            string `json:"type"`
@@ -92,7 +96,8 @@ func init() {
 		if sink.DatabasePath == "" {
 			sink.DatabasePath = fmt.Sprintf("%s-sink.sqlite3", sink.ID)
 		}
-		if !strings.HasSuffix(sink.URL, "/") {
+
+		if sink.URL != relayURLSpecialValue && !strings.HasSuffix(sink.URL, "/") {
 			sink.URL += "/"
 		}
 		sinkChannels[sink.ID] = make(chan string, 100)
@@ -115,10 +120,12 @@ func init() {
 
 		var source Source
 		switch sourceConfig.Type {
-		case "http":
-			source = &HTTPSource{}
-		case "logfile":
-			source = &LogFileSource{}
+			case "http":
+				source = &HTTPSource{}
+			case "logfile":
+				source = &LogFileSource{}
+			case "repeatfile":
+				source = &RepeatFileSource{}
 		default:
 			log.Fatalf("Unsupported source type: %s", sourceConfig.Type)
 		}
@@ -387,6 +394,11 @@ func sinkDbToRelayServer(sink Sink) {
 }
 
 func sendContent(sink Sink, content string) error {
+	if sink.URL == relayURLSpecialValue {
+		fmt.Printf("Debug: Sending content to stdout: %s\n", content)
+		return nil
+	}
+
 	fmt.Printf("Debug: Sending content: %s\n", content)
 
 	var client *http.Client
