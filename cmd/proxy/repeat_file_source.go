@@ -18,15 +18,15 @@ type RepeatFileSource struct {
 
 func (r *RepeatFileSource) Init(config SourceConfig, eventChan chan<- EventSource) error {
 	var params struct {
-		FilePath string        `json:"filePath"`
-		Interval time.Duration `json:"interval"`
+		FilePath string `json:"filePath"`
+		Interval int64  `json:"interval"`
 	}
 	if err := json.Unmarshal(config.Params, &params); err != nil {
 		return fmt.Errorf("failed to parse RepeatFile source config: %v", err)
 	}
 	r.BaseSource = config.BaseSource
 	r.FilePath = params.FilePath
-	r.Interval = params.Interval
+	r.Interval = time.Duration(params.Interval) * time.Millisecond
 	r.EventChan = eventChan
 	return nil
 }

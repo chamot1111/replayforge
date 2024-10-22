@@ -20,6 +20,31 @@ import (
 
 const (
  relayURLSpecialValue = ":dbg>stdout:"
+ debugConfig = `
+ {
+   "sources": [
+     {
+       "id": "dbg_source",
+       "type": "repeatfile",
+       "params": {
+         "filePath": "${file_path}",
+         "interval": 10000
+       },
+       "transformScript": "${script_path}",
+       "hookInterval": 1000
+     }
+   ],
+   "sinks": [
+     {
+       "id": "dbg_sink",
+       "type": "http",
+       "url": ":dbg>stdout:",
+       "buckets": [],
+       "useTsnet": false
+     }
+   ]
+ }
+`
 )
 
 type BaseSource struct {
@@ -64,17 +89,28 @@ var (
 	tsnetServer         *tsnet.Server
 )
 func init() {
+	var dbgScriptPath, dbgFilePath string
 	flag.StringVar(&configPath, "c", "", "Path to config file")
+	flag.StringVar(&dbgScriptPath, "dbg", "", "Debug mode: path to script file")
+	flag.StringVar(&dbgFilePath, "dbg-file", "", "Debug mode: path to input file")
 	flag.Parse()
 
-	if configPath == "" {
-		log.Fatal("Config file path must be provided using -c flag")
+	if configPath == "" && dbgScriptPath == "" {
+		log.Fatal("Either config file path (-c) or debug script path (--dbg) must be provided")
 	}
-
-	log.Printf("Config path: %s", configPath)
-	configData, err := os.ReadFile(configPath)
-	if err != nil {
-		log.Fatalf("Failed to read config file: %v", err)
+	var configData []byte
+	if dbgScriptPath != "" {
+		if dbgFilePath == "" {
+			log.Fatal("In debug mode, both script path (--dbg) and file path (--dbg-file) must be provided")
+		}
+		configData = []byte(strings.Replace(strings.Replace(debugConfig, "${script_path}", dbgScriptPath, -1), "${file_path}", dbgFilePath, -1))
+	} else {
+		log.Printf("Config path: %s", configPath)
+		var err error
+		configData, err = os.ReadFile(configPath)
+		if err != nil {
+			log.Fatalf("Failed to read config file: %v", err)
+		}
 	}
 
 	if err := json.Unmarshal(configData, &config); err != nil {
@@ -86,7 +122,7 @@ func init() {
 	sources = make(map[string]Source)
 	sinkChannels = make(map[string]chan string)
 
-	grokParser, err = grok.NewWithConfig(&grok.Config{NamedCapturesOnly: true})
+	grokParser, err := grok.NewWithConfig(&grok.Config{NamedCapturesOnly: true})
 	if err != nil {
 		log.Fatalf("Failed to initialize grok parser: %v", err)
 	}
