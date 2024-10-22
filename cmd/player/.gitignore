@@ -6,3 +6,4 @@ dist/
 /config.json
 /olapdb*
 /new-config.json
+/tv*

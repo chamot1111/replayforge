@@ -38,10 +38,10 @@ function Process(content, emit)
             print("Timestamp:", value.timestamp)
             print("Content:", value.content)
             event = {
-                body ={
+                body = json_encode({
                     timestamp = value.timestamp,
                     content = value.content
-                }
+                })
             }
             for key, value in pairs(parsed_content) do
                 if key ~= "body" then

@@ -63,6 +63,7 @@ func (s *SqliteSink) Init(config playerplugin.SinkConfig) error {
 		return fmt.Errorf("failed to open database: %v", err)
 	}
 	s.DB = db
+	s.ID = config.ID
 	s.TableSchemas = make(map[string]map[string]string)
 	s.loadTableSchemas()
 	return nil
