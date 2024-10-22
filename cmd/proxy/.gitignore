@@ -2,3 +2,5 @@
 /proxy.sqlite*
 /central_log*
 /config.json
+/dbg_*
+/script-examples/*.input

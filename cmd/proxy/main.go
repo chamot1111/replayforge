@@ -14,13 +14,13 @@ import (
 
 	"github.com/Shopify/go-lua"
 	_ "github.com/mattn/go-sqlite3"
-	"github.com/vjeantet/grok"
 	"tailscale.com/tsnet"
+
 )
 
 const (
- relayURLSpecialValue = ":dbg>stdout:"
- debugConfig = `
+	relayURLSpecialValue = ":dbg>stdout:"
+	debugConfig          = `
  {
    "sources": [
      {
@@ -71,23 +71,23 @@ type Sink struct {
 }
 
 type Config struct {
-	Sources []json.RawMessage
-	Sinks   []Sink
+	Sources       []json.RawMessage
+	Sinks         []Sink
 	TsnetHostname string `json:"tsnetHostname"`
 }
 
 var (
-	sources            map[string]Source
-	configPath         string
+	sources             map[string]Source
+	configPath          string
 	heartbeatIntervalMs = 100
 	maxDbSize           = int64(10 * 1024 * 1024) // 10 MB
 	config              Config
 	vms                 map[string]*lua.State
 	lastVacuumTimes     map[string]time.Time
 	sinkChannels        map[string]chan string
-	grokParser          *grok.Grok
 	tsnetServer         *tsnet.Server
 )
+
 func init() {
 	var dbgScriptPath, dbgFilePath string
 	flag.StringVar(&configPath, "c", "", "Path to config file")
@@ -122,10 +122,7 @@ func init() {
 	sources = make(map[string]Source)
 	sinkChannels = make(map[string]chan string)
 
-	grokParser, err := grok.NewWithConfig(&grok.Config{NamedCapturesOnly: true})
-	if err != nil {
-		log.Fatalf("Failed to initialize grok parser: %v", err)
-	}
+
 
 	for i := range config.Sinks {
 		sink := &config.Sinks[i]
@@ -156,12 +153,12 @@ func init() {
 
 		var source Source
 		switch sourceConfig.Type {
-			case "http":
-				source = &HTTPSource{}
-			case "logfile":
-				source = &LogFileSource{}
-			case "repeatfile":
-				source = &RepeatFileSource{}
+		case "http":
+			source = &HTTPSource{}
+		case "logfile":
+			source = &LogFileSource{}
+		case "repeatfile":
+			source = &RepeatFileSource{}
 		default:
 			log.Fatalf("Unsupported source type: %s", sourceConfig.Type)
 		}
@@ -182,29 +179,7 @@ func init() {
 		vm := lua.NewState()
 		lua.OpenLibraries(vm)
 
-		vm.Register("print", func(l *lua.State) int {
-			str, _ := l.ToString(-1)
-			fmt.Println("[Script]", str)
-			return 0
-		})
-
-		vm.Register("grok_parse", func(l *lua.State) int {
-			pattern, _ := l.ToString(-2)
-			text, _ := l.ToString(-1)
-			values, err := grokParser.Parse(pattern, text)
-			if err != nil {
-				l.PushNil()
-				l.PushString(err.Error())
-				return 2
-			}
-			l.NewTable()
-			for k, v := range values {
-				l.PushString(k)
-				l.PushString(v)
-				l.SetTable(-3)
-			}
-			return 1
-		})
+		RegisterLuaLibs(vm)
 
 		if sourceConfig.TransformScript != "" {
 			script, err := os.ReadFile(sourceConfig.TransformScript)
@@ -216,7 +191,7 @@ func init() {
 			}
 		} else if sourceConfig.TargetSink != "" {
 			defaultScript := fmt.Sprintf(`
-				function process(event, emit)
+				function Process(event, emit)
 					emit("%s", event)
 				end
 			`, sourceConfig.TargetSink)
@@ -316,7 +291,7 @@ func processEvent(event EventSource) {
 		return
 	}
 
-	vm.Global("process")
+	vm.Global("Process")
 	if !vm.IsFunction(-1) {
 		log.Printf("process function not found in script for source %s", event.SourceID)
 		vm.Pop(1)

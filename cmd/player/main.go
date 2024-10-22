@@ -183,7 +183,7 @@ func init() {
 		// Load the Lua script or use default script
 		if sc.LuaScript == "" {
 			// Create default Lua script that emits content to all configured sinks
-			defaultScript := "function process(content, emit)\n"
+			defaultScript := "function Process(content, emit)\n"
 			for _, sinkName := range sc.Sinks {
 				defaultScript += fmt.Sprintf("    emit('%s', content)\n", sinkName)
 			}
@@ -280,7 +280,7 @@ func OnServerHeartbeat(source Source, client *http.Client) {
 		return
 	}
 	// Process the event through Lua VM
-	source.LuaVM.Global("process")
+	source.LuaVM.Global("Process")
 	if source.LuaVM.IsFunction(-1) {
 		source.LuaVM.PushString(content)
 		source.LuaVM.PushGoFunction(func(l *lua.State) int {
