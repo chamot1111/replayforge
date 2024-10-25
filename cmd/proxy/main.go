@@ -20,29 +20,29 @@ import (
 const (
 	relayURLSpecialValue = ":dbg>stdout:"
 	debugConfig          = `
- {
-   "sources": [
-     {
-       "id": "dbg_source",
-       "type": "repeatfile",
-       "params": {
-         "filePath": "${file_path}",
-         "interval": 10000
-       },
-       "transformScript": "${script_path}",
-       "hookInterval": 1000
-     }
-   ],
-   "sinks": [
-     {
-       "id": "dbg_sink",
-       "type": "http",
-       "url": ":dbg>stdout:",
-       "buckets": [],
-       "useTsnet": false
-     }
-   ]
- }
+	{
+			"sources": [
+					{
+							"id": "dbg_source",
+							"type": "repeatfile",
+							"params": {
+									"filePath": "${file_path}",
+									"interval": 10000
+							},
+							"transformScript": "${script_path}",
+							"hookInterval": 1000
+					}
+			],
+			"sinks": [
+					{
+							"id": "dbg_sink",
+							"type": "http",
+							"url": ":dbg>stdout:",
+							"buckets": [],
+							"useTsnet": false
+					}
+			]
+	}
 `
 )
 
@@ -214,12 +214,13 @@ func init() {
 		vms[sourceConfig.ID] = vm
 	}
 }
+
 func setupSql(dbPath string, canVacuum bool) (*sql.DB, error, bool) {
 	info, err := os.Stat(dbPath)
 	if err == nil && info.Size() > maxDbSize && canVacuum {
 		log.Printf("Attempting to vacuum database: %s", dbPath)
 
-		tempDB, err := sql.Open("sqlite3", dbPath)
+		tempDB, err := sql.Open("sqlite3", dbPath+"?_auto_vacuum=1")
 		tempDB.Exec("PRAGMA journal_mode=WAL")
 		tempDB.Exec("PRAGMA synchronous=NORMAL")
 		if err == nil {
@@ -229,15 +230,16 @@ func setupSql(dbPath string, canVacuum bool) (*sql.DB, error, bool) {
 		}
 	}
 
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := sql.Open("sqlite3", dbPath+"?_auto_vacuum=1")
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %v", err), false
 	}
 
+	db.Exec("PRAGMA auto_vacuum = FULL")
 	db.Exec("PRAGMA journal_mode=WAL")
 	db.Exec("PRAGMA synchronous=NORMAL")
 
-	if info != nil && info.Size() > maxDbSize {
+	if info != nil && info.Size() > maxDbSize && canVacuum {
 		return db, fmt.Errorf("database size (%d bytes) exceeded maximum limit (%d bytes)", info.Size(), maxDbSize), true
 	}
 
@@ -315,7 +317,7 @@ func processEvent(event EventSource) {
 func insertIntoSinkEvents(sinkID, content string) error {
 	for _, sink := range config.Sinks {
 		if sink.ID == sinkID {
-			db, err, _ := setupSql(sink.DatabasePath, false)
+			db, err, _ := setupSql(sink.DatabasePath, true)
 			if err != nil {
 				if db != nil {
 					db.Close()

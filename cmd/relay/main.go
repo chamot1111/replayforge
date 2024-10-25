@@ -102,8 +102,10 @@ func main() {
 
 func verifyAuth(authHeader, bucket string) bool {
 	if authHeader != "" {
-		if bearer := authHeader[7:]; bearer == config.Buckets[bucket].Auth {
-			return true
+		if len(authHeader) > 7 && strings.HasPrefix(authHeader, "Bearer ") {
+			if bearer := authHeader[7:]; bearer == config.Buckets[bucket].Auth {
+				return true
+			}
 		}
 	}
 	return false
@@ -139,9 +141,29 @@ func handleRecord(w http.ResponseWriter, r *http.Request) {
 
 		stat, err := os.Stat(dbPath)
 		if err == nil && stat.Size() > int64(bucketConfig.DbMaxSizeKb*1024/2) {
-			log.Printf("Database size limit exceeded for bucket: %s", bucket)
-			http.Error(w, "Database size limit exceeded", http.StatusInternalServerError)
-			return
+			// Try to vacuum the database to reclaim space
+			db, err := sql.Open("sqlite3", dbPath + "?_auto_vacuum=1")
+			if err == nil {
+				_, vacErr := db.Exec("VACUUM")
+				db.Close()
+				if vacErr == nil {
+					// Check size again after vacuum
+					newStat, err := os.Stat(dbPath)
+					if err == nil && newStat.Size() > int64(bucketConfig.DbMaxSizeKb*1024/2) {
+						log.Printf("Database size before vacuum: %d, after vacuum: %d, still exceeds limit for bucket: %s", stat.Size(), newStat.Size(), bucket)
+						http.Error(w, "Database size limit exceeded", http.StatusTooManyRequests)
+						return
+					}
+				} else {
+					log.Printf("Failed to vacuum database for bucket %s: %v", bucket, vacErr)
+					http.Error(w, "Failed to vacuum database", http.StatusInternalServerError)
+					return
+				}
+			} else {
+				log.Printf("Database size limit exceeded for bucket: %s", bucket)
+				http.Error(w, "Database size limit exceeded", http.StatusTooManyRequests)
+				return
+			}
 		}
 
 		err = os.MkdirAll(dbFolderBucket, 0755)
@@ -151,7 +173,7 @@ func handleRecord(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		db, err := sql.Open("sqlite3", dbPath)
+		db, err := sql.Open("sqlite3", dbPath + "?_auto_vacuum=1")
 		if err != nil {
 			log.Printf("Failed to open database for bucket %s: %v", bucket, err)
 			http.Error(w, "Failed to open database", http.StatusInternalServerError)
@@ -170,6 +192,13 @@ func handleRecord(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			log.Printf("Failed to set synchronous mode for bucket %s: %v", bucket, err)
 			http.Error(w, "Failed to set synchronous mode", http.StatusInternalServerError)
+			return
+		}
+
+		_, err = db.Exec("PRAGMA auto_vacuum=FULL")
+		if err != nil {
+			log.Printf("Failed to set auto vacuum mode for bucket %s: %v", bucket, err)
+			http.Error(w, "Failed to set auto vacuum mode", http.StatusInternalServerError)
 			return
 		}
 
@@ -234,7 +263,7 @@ func handleFirst(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := sql.Open("sqlite3", dbPath + "?_auto_vacuum=1")
 	if err != nil {
 		log.Printf("Failed to open database: %v", err)
 		http.Error(w, "Failed to open database", http.StatusInternalServerError)
@@ -253,6 +282,13 @@ func handleFirst(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Printf("Failed to set synchronous mode: %v", err)
 		http.Error(w, "Failed to set synchronous mode", http.StatusInternalServerError)
+		return
+	}
+
+	_, err = db.Exec("PRAGMA auto_vacuum=FULL")
+	if err != nil {
+		log.Printf("Failed to set auto vacuum mode: %v", err)
+		http.Error(w, "Failed to set auto vacuum mode", http.StatusInternalServerError)
 		return
 	}
 
@@ -285,6 +321,7 @@ func handleFirst(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleAcknowledge(w http.ResponseWriter, r *http.Request) {
+	log.Printf("Acknowledge")
 	if r.Method != http.MethodDelete {
 		log.Printf("Method not allowed: %s", r.Method)
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -319,7 +356,7 @@ func handleAcknowledge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := sql.Open("sqlite3", dbPath + "?_auto_vacuum=1")
 	if err != nil {
 		log.Printf("Failed to open database: %v", err)
 		http.Error(w, "Failed to open database", http.StatusInternalServerError)
@@ -338,6 +375,13 @@ func handleAcknowledge(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Printf("Failed to set synchronous mode: %v", err)
 		http.Error(w, "Failed to set synchronous mode", http.StatusInternalServerError)
+		return
+	}
+
+	_, err = db.Exec("PRAGMA auto_vacuum=FULL")
+	if err != nil {
+		log.Printf("Failed to set auto vacuum mode: %v", err)
+		http.Error(w, "Failed to set auto vacuum mode", http.StatusInternalServerError)
 		return
 	}
 

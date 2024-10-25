@@ -2,21 +2,22 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"strings"
 	"time"
-	"flag"
-	"net/http/httputil"
-	"net/url"
+
 	"github.com/chamot1111/replayforge/playerplugin"
 
-	_ "github.com/mattn/go-sqlite3"
-	"tailscale.com/tsnet"
 	"github.com/Shopify/go-lua"
+	_ "github.com/mattn/go-sqlite3"
 	"github.com/vjeantet/grok"
+	"tailscale.com/tsnet"
 )
 
 type Source struct {
@@ -34,10 +35,10 @@ type SourceConfig struct {
 }
 
 type SinkConfig struct {
-	Name     string          `json:"name"`
-	Type     string          `json:"type"`
-	ID       string          `json:"id"`
-	Params   json.RawMessage `json:"params"`
+	Name   string          `json:"name"`
+	Type   string          `json:"type"`
+	ID     string          `json:"id"`
+	Params json.RawMessage `json:"params"`
 }
 
 var (
