@@ -13,24 +13,25 @@ import (
 
 type LogFileSource struct {
 	BaseSource
-	FilePath         string
-	EventChan        chan<- EventSource
-	RemoveAfterSecs  uint
+	FilePath          string
+	EventChan         chan<- EventSource
+	RemoveAfterSecs   uint
 	RemoveMaxFileSize int64
-	RotateWaitSecs   uint
-	FingerprintLines uint
-	lastPosition     int64
-	HttpPath         string
+	RotateWaitSecs    uint
+	FingerprintLines  uint
+	lastPosition      int64
+	HttpPath          string
+	lastTruncate      time.Time
 }
 
 func (l *LogFileSource) Init(config SourceConfig, eventChan chan<- EventSource) error {
 	var params struct {
-		FilePath         string `json:"filePath"`
-		RemoveAfterSecs  uint   `json:"removeAfterSecs,omitempty"`
-		RemoveMaxFileSize int64 `json:"removeMaxFileSize,omitempty"`
-		RotateWaitSecs   uint   `json:"rotateWaitSecs,omitempty"`
-		FingerprintLines uint   `json:"fingerprintLines,omitempty"`
-		HttpPath         string `json:"httpPath,omitempty"`
+		FilePath          string `json:"filePath"`
+		RemoveAfterSecs   uint   `json:"removeAfterSecs,omitempty"`
+		RemoveMaxFileSize int64  `json:"removeMaxFileSize,omitempty"`
+		RotateWaitSecs    uint   `json:"rotateWaitSecs,omitempty"`
+		FingerprintLines  uint   `json:"fingerprintLines,omitempty"`
+		HttpPath          string `json:"httpPath,omitempty"`
 	}
 	if err := json.Unmarshal(config.Params, &params); err != nil {
 		return fmt.Errorf("failed to parse LogFile source config: %v", err)
@@ -46,6 +47,7 @@ func (l *LogFileSource) Init(config SourceConfig, eventChan chan<- EventSource) 
 	if l.HttpPath == "" {
 		l.HttpPath = "/"
 	}
+	l.lastTruncate = time.Now()
 	return nil
 }
 
@@ -80,7 +82,6 @@ func (l *LogFileSource) readLogFile() {
 			time.Sleep(time.Duration(l.HookInterval) * time.Millisecond)
 			continue
 		}
-
 		if checksum == lastChecksum {
 			_, err = file.Seek(l.lastPosition, 0)
 			if err != nil {
@@ -100,8 +101,6 @@ func (l *LogFileSource) readLogFile() {
 		}
 
 		scanner := bufio.NewScanner(file)
-		eofReached := false
-		eofTime := time.Time{}
 		rotateTime := time.Now()
 		skippedEvent := false
 		for scanner.Scan() {
@@ -127,7 +126,6 @@ func (l *LogFileSource) readLogFile() {
 				log.Printf("Error marshaling JSON: %v", err)
 				return
 			}
-
 			event := EventSource{
 				SourceID: l.ID,
 				Content:  string(jsonContent),
@@ -149,9 +147,6 @@ func (l *LogFileSource) readLogFile() {
 					// Do nothing, continue to next event
 				}
 			}
-			// You might want to emit this line to a sink or process it further
-			eofReached = false
-			eofTime = time.Time{}
 		}
 
 		if err := scanner.Err(); err != nil {
@@ -160,21 +155,19 @@ func (l *LogFileSource) readLogFile() {
 
 		l.lastPosition, _ = file.Seek(0, 1) // Get current position
 
-		if !eofReached {
-			eofReached = true
-			eofTime = time.Now()
-		}
-
 		if l.RotateWaitSecs > 0 && time.Since(rotateTime) >= time.Duration(l.RotateWaitSecs)*time.Second {
 			file.Close()
 			return
 		}
-		if l.RemoveAfterSecs > 0 && eofReached && time.Since(eofTime) >= time.Duration(l.RemoveAfterSecs)*time.Second {
+
+		if l.RemoveAfterSecs > 0 && time.Since(l.lastTruncate) >= time.Duration(l.RemoveAfterSecs)*time.Second {
 			file.Close()
+			log.Printf("Attempting to truncate log file %s", l.FilePath)
 			if err := os.Truncate(l.FilePath, 0); err != nil {
 				log.Printf("Failed to truncate log file %s: %v", l.FilePath, err)
 			} else {
-				log.Printf("Truncated log file %s after %d seconds of inactivity", l.FilePath, l.RemoveAfterSecs)
+				log.Printf("Successfully truncated log file %s after %d seconds", l.FilePath, l.RemoveAfterSecs)
+				l.lastTruncate = time.Now()
 				return
 			}
 		}
@@ -189,6 +182,7 @@ func (l *LogFileSource) readLogFile() {
 					log.Printf("Failed to truncate log file %s: %v", l.FilePath, err)
 				} else {
 					log.Printf("Truncated log file %s after reaching max size of %d bytes", l.FilePath, l.RemoveMaxFileSize)
+					l.lastTruncate = time.Now()
 					return
 				}
 			}
