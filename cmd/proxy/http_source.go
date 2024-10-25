@@ -33,8 +33,11 @@ func (h *HTTPSource) Init(config SourceConfig, eventChan chan<- EventSource) err
 }
 
 func (h *HTTPSource) Start() error {
-    db, err := setupSql(h.DatabasePath, true)
+    db, err, _ := setupSql(h.DatabasePath, true)
     if (err != nil) {
+   		if db != nil {
+           db.Close()
+       	}
         return fmt.Errorf("error setting up SQL for source %s: %v", h.ID, err)
     }
     defer db.Close()
@@ -62,8 +65,11 @@ func (h *HTTPSource) Stop() error {
 }
 
 func (h *HTTPSource) handleRequest(w http.ResponseWriter, r *http.Request) {
-    db, err := setupSql(h.DatabasePath, false)
+    db, err, _ := setupSql(h.DatabasePath, false)
     if err != nil {
+    	if db != nil {
+            db.Close()
+        }
         log.Printf("Error setting up SQL: %v", err)
         http.Error(w, fmt.Sprintf("Error: %v", err), http.StatusInternalServerError)
         return

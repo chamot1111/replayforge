@@ -15,7 +15,6 @@ import (
 	"github.com/Shopify/go-lua"
 	_ "github.com/mattn/go-sqlite3"
 	"tailscale.com/tsnet"
-
 )
 
 const (
@@ -122,8 +121,6 @@ func init() {
 	sources = make(map[string]Source)
 	sinkChannels = make(map[string]chan string)
 
-
-
 	for i := range config.Sinks {
 		sink := &config.Sinks[i]
 		if sink.DatabasePath == "" {
@@ -134,9 +131,13 @@ func init() {
 			sink.URL += "/"
 		}
 		sinkChannels[sink.ID] = make(chan string, 100)
-		db, err := initSetupSql(sink.DatabasePath, false)
+		db, err, isSpaceError := initSetupSql(sink.DatabasePath, false)
 		if err != nil {
-			log.Fatalf("Error setting up SQL for sink %s: %v", sink.ID, err)
+			if !isSpaceError {
+				log.Fatalf("Error setting up SQL for sink %s: %v", sink.ID, err)
+			} else {
+				log.Printf("Warning: Space error setting up SQL for sink %s: %v", sink.ID, err)
+			}
 		}
 		db.Close()
 	}
@@ -213,50 +214,43 @@ func init() {
 		vms[sourceConfig.ID] = vm
 	}
 }
-
-func setupSql(dbPath string, canVacuum bool) (*sql.DB, error) {
+func setupSql(dbPath string, canVacuum bool) (*sql.DB, error, bool) {
 	info, err := os.Stat(dbPath)
-	if err == nil && info.Size() > maxDbSize {
-		if canVacuum {
-			log.Printf("Attempting to vacuum database: %s", dbPath)
-			tempDB, err := sql.Open("sqlite3", dbPath)
-			if err != nil {
-				return nil, fmt.Errorf("failed to open database: %v", err)
-			}
-			_, err = tempDB.Exec("VACUUM")
+	if err == nil && info.Size() > maxDbSize && canVacuum {
+		log.Printf("Attempting to vacuum database: %s", dbPath)
+
+		tempDB, err := sql.Open("sqlite3", dbPath)
+		tempDB.Exec("PRAGMA journal_mode=WAL")
+		tempDB.Exec("PRAGMA synchronous=NORMAL")
+		if err == nil {
+			tempDB.Exec("VACUUM")
 			tempDB.Close()
-			if err != nil {
-				return nil, fmt.Errorf("failed to vacuum database: %v", err)
-			}
 			info, _ = os.Stat(dbPath)
-		}
-		if info.Size() > maxDbSize {
-			return nil, fmt.Errorf("database size (%d bytes) exceeded maximum limit (%d bytes)", info.Size(), maxDbSize)
 		}
 	}
 
 	db, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open database: %v", err)
+		return nil, fmt.Errorf("failed to open database: %v", err), false
 	}
 
-	_, err = db.Exec("PRAGMA journal_mode=WAL")
-	if err != nil {
-		return nil, fmt.Errorf("failed to set journal mode: %v", err)
+	db.Exec("PRAGMA journal_mode=WAL")
+	db.Exec("PRAGMA synchronous=NORMAL")
+
+	if info != nil && info.Size() > maxDbSize {
+		return db, fmt.Errorf("database size (%d bytes) exceeded maximum limit (%d bytes)", info.Size(), maxDbSize), true
 	}
 
-	_, err = db.Exec("PRAGMA synchronous=NORMAL")
-	if err != nil {
-		return nil, fmt.Errorf("failed to set synchronous mode: %v", err)
-	}
-
-	return db, nil
+	return db, nil, false
 }
 
-func initSetupSql(dbPath string, isSource bool) (*sql.DB, error) {
-	db, err := setupSql(dbPath, true)
-	if err != nil {
-		return nil, fmt.Errorf("failed to setup database: %v", err)
+func initSetupSql(dbPath string, isSource bool) (*sql.DB, error, bool) {
+	db, err, isSpaceError := setupSql(dbPath, true)
+	if err != nil && !isSpaceError {
+		if db != nil {
+			db.Close()
+		}
+		return nil, fmt.Errorf("failed to setup database: %v", err), isSpaceError
 	}
 
 	if isSource {
@@ -267,7 +261,7 @@ func initSetupSql(dbPath string, isSource bool) (*sql.DB, error) {
 			)
 		`)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create source_events table: %v", err)
+			return nil, fmt.Errorf("failed to create source_events table: %v", err), false
 		}
 	} else {
 		_, err = db.Exec(`
@@ -277,11 +271,14 @@ func initSetupSql(dbPath string, isSource bool) (*sql.DB, error) {
 			)
 		`)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create sink_events table: %v", err)
+			return nil, fmt.Errorf("failed to create sink_events table: %v", err), false
 		}
 	}
 
-	return db, nil
+	if isSpaceError {
+		return db, fmt.Errorf("failed to setup database due to space constraints: %v", err), isSpaceError
+	}
+	return db, nil, false
 }
 
 func processEvent(event EventSource) {
@@ -318,8 +315,11 @@ func processEvent(event EventSource) {
 func insertIntoSinkEvents(sinkID, content string) error {
 	for _, sink := range config.Sinks {
 		if sink.ID == sinkID {
-			db, err := setupSql(sink.DatabasePath, false)
+			db, err, _ := setupSql(sink.DatabasePath, false)
 			if err != nil {
+				if db != nil {
+					db.Close()
+				}
 				return fmt.Errorf("failed to setup SQL for sink %s: %v", sinkID, err)
 			}
 			defer db.Close()
@@ -340,24 +340,12 @@ func sinkDbToRelayServer(sink Sink) {
 		return
 	}
 
-	sinkDB, err := sql.Open("sqlite3", sink.DatabasePath)
+	sinkDB, err, _ := setupSql(sink.DatabasePath, false)
 	if err != nil {
 		log.Printf("Failed to open sink database: %v", err)
 		return
 	}
 	defer sinkDB.Close()
-
-	_, err = sinkDB.Exec("PRAGMA journal_mode=WAL")
-	if err != nil {
-		log.Printf("Failed to set journal mode: %v", err)
-		return
-	}
-
-	_, err = sinkDB.Exec("PRAGMA synchronous=NORMAL")
-	if err != nil {
-		log.Printf("Failed to set synchronous mode: %v", err)
-		return
-	}
 
 	currentTime := time.Now()
 	if lastVacuumTime, ok := lastVacuumTimes[sink.ID]; !ok || currentTime.Sub(lastVacuumTime) >= time.Hour {
@@ -501,9 +489,13 @@ func main() {
 	}
 
 	for _, sink := range config.Sinks {
-		db, err := initSetupSql(sink.DatabasePath, false)
+		db, err, isSpaceError := initSetupSql(sink.DatabasePath, false)
 		if err != nil {
-			log.Fatalf("Error setting up SQL for sink %s: %v", sink.ID, err)
+			if !isSpaceError {
+				log.Fatalf("Error setting up SQL for sink %s: %v", sink.ID, err)
+			} else {
+				log.Printf("Warning: Space error setting up SQL for sink %s: %v", sink.ID, err)
+			}
 		}
 		db.Close()
 
