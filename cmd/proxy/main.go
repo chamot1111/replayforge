@@ -314,28 +314,6 @@ func processEvent(event EventSource) {
 	}
 }
 
-func insertIntoSinkEvents(sinkID, content string) error {
-	for _, sink := range config.Sinks {
-		if sink.ID == sinkID {
-			db, err, _ := setupSql(sink.DatabasePath, true)
-			if err != nil {
-				if db != nil {
-					db.Close()
-				}
-				return fmt.Errorf("failed to setup SQL for sink %s: %v", sinkID, err)
-			}
-			defer db.Close()
-
-			_, err = db.Exec("INSERT INTO sink_events (content) VALUES (?)", content)
-			if err != nil {
-				return fmt.Errorf("failed to insert into sink_events: %v", err)
-			}
-			return nil
-		}
-	}
-	return fmt.Errorf("sink not found: %s", sinkID)
-}
-
 func sinkDbToRelayServer(sink Sink) {
 	if _, err := os.Stat(sink.DatabasePath); os.IsNotExist(err) {
 		log.Printf("Database file does not exist: %s", sink.DatabasePath)
@@ -502,11 +480,43 @@ func main() {
 		db.Close()
 
 		go func(s Sink) {
+			db, err, _ := setupSql(s.DatabasePath, true)
+			if err != nil {
+				if(db != nil) {
+					db.Close()
+					db = nil
+				}
+				log.Printf("Failed to open database for sink %s: %v", s.ID, err)
+			}
+			insertCount := 0
 			for content := range sinkChannels[s.ID] {
-				if err := insertIntoSinkEvents(s.ID, content); err != nil {
-					log.Printf("Failed to insert into sink_events for sink %s: %v", s.ID, err)
+				insertCount++
+				if db == nil {
+					log.Printf("Database not ready for sink %s, waiting for next cycle", s.ID)
+				} else {
+					_, err = db.Exec("INSERT INTO sink_events (content) VALUES (?)", content)
+					if err != nil {
+						log.Printf("Failed to insert into sink_events for sink %s: %v", s.ID, err)
+					}
+				}
+				if insertCount >= 100 {
+					insertCount = 0
+					if db != nil {
+						db.Close()
+						db = nil
+					}
+
+					db, err, _ = setupSql(s.DatabasePath, true)
+					if err != nil {
+						if db != nil {
+							db.Close()
+							db = nil
+						}
+						log.Printf("Failed to reopen database for sink %s: %v", s.ID, err)
+					}
 				}
 			}
+			db.Close()
 		}(sink)
 	}
 
