@@ -46,7 +46,7 @@ type SinkConfig struct {
 var (
 	configPath          string
 	config              map[string]interface{}
-	heartbeatIntervalMs = 100
+	heartbeatIntervalMs = 1000
 	maxDbSize           = 100 * 1024 * 1024 // 100 MB
 	relayUrl            string
 	sources             []Source
@@ -275,8 +275,7 @@ func OnServerHeartbeat(source Source, client *http.Client) {
 		fmt.Printf("Error decoding response body: %v\n", err)
 		return
 	}
-
-	var idsToAck []int
+	var idsToAck []string
 
 	for _, responseMap := range responseBatch {
 		id, ok := responseMap["id"].(float64)
@@ -284,7 +283,7 @@ func OnServerHeartbeat(source Source, client *http.Client) {
 			fmt.Println("Error: 'id' not found in response or not a number")
 			continue
 		}
-		idInt := int(id)
+		idStr := fmt.Sprintf("%d", int(id))
 
 		content, ok := responseMap["content"].(string)
 		if !ok {
@@ -345,12 +344,12 @@ func OnServerHeartbeat(source Source, client *http.Client) {
 			continue
 		}
 
-		idsToAck = append(idsToAck, idInt)
+		idsToAck = append(idsToAck, idStr)
 	}
 
 	if len(idsToAck) > 0 {
 		// Acknowledge relay server
-		ackBody, err := json.Marshal(map[string][]int{"ids": idsToAck})
+		ackBody, err := json.Marshal(map[string][]string{"ids": idsToAck})
 		if err != nil {
 			fmt.Printf("Error marshaling acknowledgment body: %v\n", err)
 			return
