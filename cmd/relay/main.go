@@ -32,9 +32,10 @@ type BucketConfig struct {
 }
 
 type Config struct {
-	Buckets    map[string]BucketConfig `json:"buckets"`
-	Port       int                     `json:"port"`
-	UseTailnet bool                    `json:"useTailnet"`
+	Buckets         map[string]BucketConfig `json:"buckets"`
+	Port            int                     `json:"port"`
+	UseTailnet      bool                    `json:"useTailnet"`
+	TailnetHostname string                  `json:"tailnetHostname,omitempty"`
 }
 
 func init() {
@@ -84,14 +85,17 @@ func main() {
 	}
 
 	// Main server loop would go here
-	http.HandleFunc("/record", handleRecord)
 	http.HandleFunc("/record-batch", handleRecordBatch)
 	http.HandleFunc("/first", handleFirst)
 	http.HandleFunc("/acknowledge", handleAcknowledge)
 
 	if config.UseTailnet {
+		hostname := "relay-forwarder"
+		if config.TailnetHostname != "" {
+			hostname = config.TailnetHostname
+		}
 		s := &tsnet.Server{
-			Hostname: "relay-forwarder",
+			Hostname: hostname,
 		}
 		defer s.Close()
 
@@ -118,130 +122,6 @@ func verifyAuth(authHeader, bucket string) bool {
 		}
 	}
 	return false
-}
-
-func handleRecord(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		log.Printf("Method not allowed: %s", r.Method)
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		log.Printf("Failed to read body: %v", err)
-		http.Error(w, "Failed to read body", http.StatusInternalServerError)
-		return
-	}
-
-	buckets := strings.Split(r.Header.Get("RF-BUCKETS"), ",")
-	for _, bucket := range buckets {
-		bucket = strings.TrimSpace(bucket)
-		if !verifyAuth(r.Header.Get("Authorization"), bucket) {
-			log.Printf("Authentication failed for bucket: %s", bucket)
-			http.Error(w, "Authentication failed", http.StatusUnauthorized)
-			return
-		}
-
-		bucketConfig := config.Buckets[bucket]
-
-		dbFolderBucket := filepath.Join(dbFolder, bucket)
-		dbPath := filepath.Join(dbFolderBucket, "relay.sqlite3")
-
-		stat, err := os.Stat(dbPath)
-		if err == nil && stat.Size() > int64(bucketConfig.DbMaxSizeKb*1024/2) {
-			// Try to vacuum the database to reclaim space
-			db, err := sql.Open("sqlite3", dbPath + "?_auto_vacuum=1")
-			if err == nil {
-				_, vacErr := db.Exec("VACUUM")
-				db.Close()
-				if vacErr == nil {
-					// Check size again after vacuum
-					newStat, err := os.Stat(dbPath)
-					if err == nil && newStat.Size() > int64(bucketConfig.DbMaxSizeKb*1024/2) {
-						log.Printf("Database size before vacuum: %d, after vacuum: %d, still exceeds limit for bucket: %s", stat.Size(), newStat.Size(), bucket)
-						http.Error(w, "Database size limit exceeded", http.StatusTooManyRequests)
-						return
-					}
-				} else {
-					log.Printf("Failed to vacuum database for bucket %s: %v", bucket, vacErr)
-					http.Error(w, "Failed to vacuum database", http.StatusInternalServerError)
-					return
-				}
-			} else {
-				log.Printf("Database size limit exceeded for bucket: %s", bucket)
-				http.Error(w, "Database size limit exceeded", http.StatusTooManyRequests)
-				return
-			}
-		}
-
-		err = os.MkdirAll(dbFolderBucket, 0755)
-		if err != nil {
-			log.Printf("Failed to create database folder for bucket %s: %v", bucket, err)
-			http.Error(w, "Failed to create database folder", http.StatusInternalServerError)
-			return
-		}
-
-		db, err := sql.Open("sqlite3", dbPath + "?_auto_vacuum=1")
-		if err != nil {
-			log.Printf("Failed to open database for bucket %s: %v", bucket, err)
-			http.Error(w, "Failed to open database", http.StatusInternalServerError)
-			return
-		}
-		defer db.Close()
-
-		_, err = db.Exec("PRAGMA journal_mode=WAL")
-		if err != nil {
-			log.Printf("Failed to set journal mode for bucket %s: %v", bucket, err)
-			http.Error(w, "Failed to set journal mode", http.StatusInternalServerError)
-			return
-		}
-
-		_, err = db.Exec("PRAGMA synchronous=NORMAL")
-		if err != nil {
-			log.Printf("Failed to set synchronous mode for bucket %s: %v", bucket, err)
-			http.Error(w, "Failed to set synchronous mode", http.StatusInternalServerError)
-			return
-		}
-
-		_, err = db.Exec("PRAGMA auto_vacuum=FULL")
-		if err != nil {
-			log.Printf("Failed to set auto vacuum mode for bucket %s: %v", bucket, err)
-			http.Error(w, "Failed to set auto vacuum mode", http.StatusInternalServerError)
-			return
-		}
-
-		_, err = db.Exec(`
-			CREATE TABLE IF NOT EXISTS wrap_calls (
-							id INTEGER PRIMARY KEY,
-							content TEXT,
-							timestamp INTEGER
-			);
-			CREATE INDEX IF NOT EXISTS idx_timestamp ON wrap_calls (timestamp);
-								`)
-		if err != nil {
-			log.Printf("Failed to create table or index for bucket %s: %v", bucket, err)
-			http.Error(w, "Failed to create table or index", http.StatusInternalServerError)
-			return
-		}
-
-		_, err = db.Exec("INSERT INTO wrap_calls (content, timestamp) VALUES (?, ?)", string(body), time.Now().Unix())
-		if err != nil {
-			log.Printf("Failed to insert data for bucket %s: %v", bucket, err)
-			http.Error(w, "Failed to insert data", http.StatusInternalServerError)
-			return
-		}
-
-		// Delete expired records if Tls > 0
-		if bucketConfig.Tls > 0 {
-			_, err = db.Exec("DELETE FROM wrap_calls WHERE timestamp < ?", time.Now().Unix()-int64(bucketConfig.Tls))
-			if err != nil {
-				log.Printf("Failed to delete expired records for bucket %s: %v", bucket, err)
-			}
-		}
-	}
-
-	w.WriteHeader(http.StatusOK)
 }
 
 func handleRecordBatch(w http.ResponseWriter, r *http.Request) {
@@ -313,13 +193,27 @@ func handleRecordBatch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		db, err := sql.Open("sqlite3", dbPath + "?_auto_vacuum=1")
+		db, err := sql.Open("sqlite3", dbPath + "?_auto_vacuum=1&_journal_mode=WAL&_synchronous=NORMAL")
 		if err != nil {
 			log.Printf("Failed to open database for bucket %s: %v", bucket, err)
 			http.Error(w, "Failed to open database", http.StatusInternalServerError)
 			return
 		}
 		defer db.Close()
+
+		_, err = db.Exec(`
+			CREATE TABLE IF NOT EXISTS wrap_calls (
+							id INTEGER PRIMARY KEY,
+							content TEXT,
+							timestamp INTEGER
+			);
+			CREATE INDEX IF NOT EXISTS idx_timestamp ON wrap_calls (timestamp);
+								`)
+		if err != nil {
+			log.Printf("Failed to create table or index for bucket %s: %v", bucket, err)
+			http.Error(w, "Failed to create table or index", http.StatusInternalServerError)
+			return
+		}
 
 		tx, err := db.Begin()
 		if err != nil {
@@ -352,6 +246,14 @@ func handleRecordBatch(w http.ResponseWriter, r *http.Request) {
 			log.Printf("Failed to commit transaction for bucket %s: %v", bucket, err)
 			http.Error(w, "Failed to commit transaction", http.StatusInternalServerError)
 			return
+		}
+
+		// Delete expired records if Tls > 0
+		if bucketConfig.Tls > 0 {
+			_, err = db.Exec("DELETE FROM wrap_calls WHERE timestamp < ?", time.Now().Unix()-int64(bucketConfig.Tls))
+			if err != nil {
+				log.Printf("Failed to delete expired records for bucket %s: %v", bucket, err)
+			}
 		}
 	}
 
