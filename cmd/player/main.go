@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -15,10 +16,10 @@ import (
 	"github.com/chamot1111/replayforge/playerplugin"
 
 	"github.com/Shopify/go-lua"
+	"github.com/chamot1111/replayforge/internal/envparser"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/vjeantet/grok"
 	"tailscale.com/tsnet"
-	"github.com/chamot1111/replayforge/internal/envparser"
 )
 
 type Source struct {
@@ -243,9 +244,8 @@ func init() {
 		fmt.Printf("Source: %s, RelayAuthenticationBearer: %s\n", source.Name, source.RelayAuthenticationBearer)
 	}
 }
-
 func OnServerHeartbeat(source Source, client *http.Client) {
-	req, err := http.NewRequest("GET", relayUrl+"first", nil)
+	req, err := http.NewRequest("GET", relayUrl+"first-batch?limit=10", nil)
 	if err != nil {
 		fmt.Printf("Error creating request: %v\n", err)
 		return
@@ -269,101 +269,118 @@ func OnServerHeartbeat(source Source, client *http.Client) {
 		return
 	}
 
-	var responseMap map[string]interface{}
-	err = json.NewDecoder(resp.Body).Decode(&responseMap)
+	var responseBatch []map[string]interface{}
+	err = json.NewDecoder(resp.Body).Decode(&responseBatch)
 	if err != nil {
 		fmt.Printf("Error decoding response body: %v\n", err)
 		return
 	}
 
-	id, ok := responseMap["id"].(float64)
-	if !ok {
-		fmt.Println("Error: 'id' not found in response or not a number")
-		return
-	}
-	idInt := int(id)
+	var idsToAck []int
 
-	content, ok := responseMap["content"].(string)
-	if !ok {
-		fmt.Println("Error: 'content' not found in response or not a string")
-		return
-	}
-	// Process the event through Lua VM
-	source.LuaVM.Global("Process")
-	if source.LuaVM.IsFunction(-1) {
-		source.LuaVM.PushString(content)
-		source.LuaVM.PushGoFunction(func(l *lua.State) int {
-			sinkId, _ := l.ToString(1)
-			emittedContent, _ := l.ToString(2)
+	for _, responseMap := range responseBatch {
+		id, ok := responseMap["id"].(float64)
+		if !ok {
+			fmt.Println("Error: 'id' not found in response or not a number")
+			continue
+		}
+		idInt := int(id)
 
-			fmt.Printf("Processed content for sink %s: %s\n", sinkId, emittedContent)
-
-			// Parse the processed content
-			var decodedData map[string]interface{}
-			err = json.Unmarshal([]byte(emittedContent), &decodedData)
-			if err != nil {
-				fmt.Printf("Error decoding processed JSON data: %v\n", err)
-				return 0
-			}
-
-			method, _ := decodedData["method"].(string)
-			path, _ := decodedData["path"].(string)
-			requestBody, _ := decodedData["body"].(string)
-			headers, _ := decodedData["headers"].(map[string]interface{})
-			params, _ := decodedData["params"].(map[string]interface{})
-
-			sinkFound := false
-			for _, sink := range source.Sinks {
-				if sink.GetID() == sinkId {
-					err = sink.Execute(method, path, []byte(requestBody), headers, params)
-					if err != nil {
-						fmt.Printf("Error executing sink operation for source %s and sink %s: %v\n", source.Name, sinkId, err)
-					}
-					sinkFound = true
-					break
-				}
-			}
-			if !sinkFound {
-				fmt.Printf("Error: Sink with ID %s not found for source %s\n", sinkId, source.Name)
-			}
-
-			return 0
-		})
-
-		if err := source.LuaVM.ProtectedCall(2, 1, 0); err != nil {
-			fmt.Printf("Error calling process function for source %s: %v\n", source.Name, err)
+		content, ok := responseMap["content"].(string)
+		if !ok {
+			fmt.Println("Error: 'content' not found in response or not a string")
+			continue
 		}
 
-	} else {
-		fmt.Printf("Error: 'process' function not found in Lua script for source %s\n", source.Name)
-		source.LuaVM.Pop(1)
+		// Process the event through Lua VM
+		source.LuaVM.Global("Process")
+		if source.LuaVM.IsFunction(-1) {
+			source.LuaVM.PushString(content)
+			source.LuaVM.PushGoFunction(func(l *lua.State) int {
+				sinkId, _ := l.ToString(1)
+				emittedContent, _ := l.ToString(2)
+
+				fmt.Printf("Processed content for sink %s: %s\n", sinkId, emittedContent)
+
+				// Parse the processed content
+				var decodedData map[string]interface{}
+				err = json.Unmarshal([]byte(emittedContent), &decodedData)
+				if err != nil {
+					fmt.Printf("Error decoding processed JSON data: %v\n", err)
+					return 0
+				}
+
+				method, _ := decodedData["method"].(string)
+				path, _ := decodedData["path"].(string)
+				requestBody, _ := decodedData["body"].(string)
+				headers, _ := decodedData["headers"].(map[string]interface{})
+				params, _ := decodedData["params"].(map[string]interface{})
+
+				sinkFound := false
+				for _, sink := range source.Sinks {
+					if sink.GetID() == sinkId {
+						err = sink.Execute(method, path, []byte(requestBody), headers, params)
+						if err != nil {
+							fmt.Printf("Error executing sink operation for source %s and sink %s: %v\n", source.Name, sinkId, err)
+						}
+						sinkFound = true
+						break
+					}
+				}
+				if !sinkFound {
+					fmt.Printf("Error: Sink with ID %s not found for source %s\n", sinkId, source.Name)
+				}
+
+				return 0
+			})
+
+			if err := source.LuaVM.ProtectedCall(2, 1, 0); err != nil {
+				fmt.Printf("Error calling process function for source %s: %v\n", source.Name, err)
+				continue
+			}
+
+		} else {
+			fmt.Printf("Error: 'process' function not found in Lua script for source %s\n", source.Name)
+			source.LuaVM.Pop(1)
+			continue
+		}
+
+		idsToAck = append(idsToAck, idInt)
 	}
 
-	// Acknowledge relay server
-	acknowledgeUrl := fmt.Sprintf("%sacknowledge?id=%d", relayUrl, idInt)
-	ackReq, err := http.NewRequest("DELETE", acknowledgeUrl, nil)
-	if err != nil {
-		fmt.Printf("Error creating acknowledgment request: %v\n", err)
-		return
-	}
-	ackReq.Header.Set("RF-BUCKET", source.Name)
-	ackReq.Header.Set("Authorization", "Bearer "+source.RelayAuthenticationBearer)
-
-	ackResp, err := client.Do(ackReq)
-	if err != nil {
-		fmt.Printf("Error sending acknowledgment: %v\n", err)
-		return
-	}
-	defer ackResp.Body.Close()
-
-	if ackResp.StatusCode != 200 {
-		fmt.Printf("Unexpected status code from acknowledgment: %d\n", ackResp.StatusCode)
-		ackBody, err := io.ReadAll(ackResp.Body)
+	if len(idsToAck) > 0 {
+		// Acknowledge relay server
+		ackBody, err := json.Marshal(map[string][]int{"ids": idsToAck})
 		if err != nil {
-			fmt.Printf("Error reading acknowledgment response body: %v\n", err)
+			fmt.Printf("Error marshaling acknowledgment body: %v\n", err)
 			return
 		}
-		fmt.Printf("Acknowledgment response: %s\n", string(ackBody))
+
+		ackReq, err := http.NewRequest("POST", relayUrl+"acknowledge-batch", bytes.NewBuffer(ackBody))
+		if err != nil {
+			fmt.Printf("Error creating acknowledgment request: %v\n", err)
+			return
+		}
+		ackReq.Header.Set("RF-BUCKET", source.Name)
+		ackReq.Header.Set("Authorization", "Bearer "+source.RelayAuthenticationBearer)
+		ackReq.Header.Set("Content-Type", "application/json")
+
+		ackResp, err := client.Do(ackReq)
+		if err != nil {
+			fmt.Printf("Error sending acknowledgment: %v\n", err)
+			return
+		}
+		defer ackResp.Body.Close()
+
+		if ackResp.StatusCode != 200 {
+			fmt.Printf("Unexpected status code from acknowledgment: %d\n", ackResp.StatusCode)
+			ackRespBody, err := io.ReadAll(ackResp.Body)
+			if err != nil {
+				fmt.Printf("Error reading acknowledgment response body: %v\n", err)
+				return
+			}
+			fmt.Printf("Acknowledgment response: %s\n", string(ackRespBody))
+		}
 	}
 }
 

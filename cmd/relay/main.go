@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strconv"
 	"database/sql"
 	"encoding/json"
 	"flag"
@@ -86,8 +87,8 @@ func main() {
 
 	// Main server loop would go here
 	http.HandleFunc("/record-batch", handleRecordBatch)
-	http.HandleFunc("/first", handleFirst)
-	http.HandleFunc("/acknowledge", handleAcknowledge)
+	http.HandleFunc("/first-batch", handleFirstBatch)
+	http.HandleFunc("/acknowledge-batch", handleAcknowledgeBatch)
 
 	if config.UseTailnet {
 		hostname := "relay-forwarder"
@@ -266,170 +267,216 @@ func handleRecordBatch(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func handleFirst(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		log.Printf("Method not allowed: %s", r.Method)
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
+func handleFirstBatch(w http.ResponseWriter, r *http.Request) {
+ if r.Method != http.MethodGet {
+  log.Printf("Method not allowed: %s", r.Method)
+  http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+  return
+ }
 
-	bucket := r.Header.Get("RF-BUCKET")
-	if bucket == "" {
-		log.Printf("Missing RF-BUCKET header")
-		http.Error(w, "Missing RF-BUCKET header", http.StatusBadRequest)
-		return
-	}
+ bucket := r.Header.Get("RF-BUCKET")
+ if bucket == "" {
+  log.Printf("Missing RF-BUCKET header")
+  http.Error(w, "Missing RF-BUCKET header", http.StatusBadRequest)
+  return
+ }
 
-	if !verifyAuth(r.Header.Get("Authorization"), bucket) {
-		log.Printf("Authentication failed for bucket: %s", bucket)
-		http.Error(w, "Authentication failed", http.StatusUnauthorized)
-		return
-	}
+ if !verifyAuth(r.Header.Get("Authorization"), bucket) {
+  log.Printf("Authentication failed for bucket: %s", bucket)
+  http.Error(w, "Authentication failed", http.StatusUnauthorized)
+  return
+ }
 
-	dbPath := filepath.Join(dbFolder, bucket, "relay.sqlite3")
+ limitStr := r.URL.Query().Get("limit")
+ limit := 100 // Default limit
+ if limitStr != "" {
+  parsedLimit, err := strconv.Atoi(limitStr)
+  if err != nil || parsedLimit <= 0 {
+   log.Printf("Invalid limit parameter: %s", limitStr)
+   http.Error(w, "Invalid limit parameter", http.StatusBadRequest)
+   return
+  }
+  if parsedLimit < limit {
+   limit = parsedLimit
+  }
+ }
 
-	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
-		log.Printf("No content found for bucket: %s", bucket)
-		http.Error(w, "No content found", http.StatusNotFound)
-		return
-	}
+ dbPath := filepath.Join(dbFolder, bucket, "relay.sqlite3")
 
-	db, err := sql.Open("sqlite3", dbPath + "?_auto_vacuum=1")
-	if err != nil {
-		log.Printf("Failed to open database: %v", err)
-		http.Error(w, "Failed to open database", http.StatusInternalServerError)
-		return
-	}
-	defer db.Close()
+ if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+  log.Printf("No content found for bucket: %s", bucket)
+  http.Error(w, "No content found", http.StatusNotFound)
+  return
+ }
 
-	_, err = db.Exec("PRAGMA journal_mode=WAL")
-	if err != nil {
-		log.Printf("Failed to set journal mode: %v", err)
-		http.Error(w, "Failed to set journal mode", http.StatusInternalServerError)
-		return
-	}
+ db, err := sql.Open("sqlite3", dbPath + "?_auto_vacuum=1")
+ if err != nil {
+  log.Printf("Failed to open database: %v", err)
+  http.Error(w, "Failed to open database", http.StatusInternalServerError)
+  return
+ }
+ defer db.Close()
 
-	_, err = db.Exec("PRAGMA synchronous=NORMAL")
-	if err != nil {
-		log.Printf("Failed to set synchronous mode: %v", err)
-		http.Error(w, "Failed to set synchronous mode", http.StatusInternalServerError)
-		return
-	}
+ _, err = db.Exec("PRAGMA journal_mode=WAL")
+ if err != nil {
+  log.Printf("Failed to set journal mode: %v", err)
+  http.Error(w, "Failed to set journal mode", http.StatusInternalServerError)
+  return
+ }
 
-	_, err = db.Exec("PRAGMA auto_vacuum=FULL")
-	if err != nil {
-		log.Printf("Failed to set auto vacuum mode: %v", err)
-		http.Error(w, "Failed to set auto vacuum mode", http.StatusInternalServerError)
-		return
-	}
+ _, err = db.Exec("PRAGMA synchronous=NORMAL")
+ if err != nil {
+  log.Printf("Failed to set synchronous mode: %v", err)
+  http.Error(w, "Failed to set synchronous mode", http.StatusInternalServerError)
+  return
+ }
 
-	var id int
-	var content string
-	err = db.QueryRow(`
-								SELECT id, content
-								FROM wrap_calls
-								WHERE id = (SELECT MIN(id) FROM wrap_calls)
-				`).Scan(&id, &content)
+ _, err = db.Exec("PRAGMA auto_vacuum=FULL")
+ if err != nil {
+  log.Printf("Failed to set auto vacuum mode: %v", err)
+  http.Error(w, "Failed to set auto vacuum mode", http.StatusInternalServerError)
+  return
+ }
 
-	if err == sql.ErrNoRows {
-		w.WriteHeader(http.StatusNotFound)
-		w.Write([]byte("{}"))
-		return
-	} else if err != nil {
-		log.Printf("Failed to query database: %v", err)
-		http.Error(w, "Failed to query database", http.StatusInternalServerError)
-		return
-	}
+ rows, err := db.Query(`
+        SELECT id, content
+        FROM wrap_calls
+        ORDER BY id ASC
+        LIMIT ?
+    `, limit)
+ if err != nil {
+  log.Printf("Failed to query database: %v", err)
+  http.Error(w, "Failed to query database", http.StatusInternalServerError)
+  return
+ }
+ defer rows.Close()
 
-	response := map[string]interface{}{
-		"id":      id,
-		"content": content,
-	}
+ var results []map[string]interface{}
+ for rows.Next() {
+  var id int
+  var content string
+  if err := rows.Scan(&id, &content); err != nil {
+   log.Printf("Failed to scan row: %v", err)
+   http.Error(w, "Failed to scan row", http.StatusInternalServerError)
+   return
+  }
+  results = append(results, map[string]interface{}{
+   "id":      id,
+   "content": content,
+  })
+ }
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(response)
+ if len(results) == 0 {
+  w.WriteHeader(http.StatusNotFound)
+  w.Write([]byte("[]"))
+  return
+ }
+
+ w.Header().Set("Content-Type", "application/json")
+ w.WriteHeader(http.StatusOK)
+ json.NewEncoder(w).Encode(results)
 }
 
-func handleAcknowledge(w http.ResponseWriter, r *http.Request) {
-	log.Printf("Acknowledge")
-	if r.Method != http.MethodDelete {
-		log.Printf("Method not allowed: %s", r.Method)
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
+func handleAcknowledgeBatch(w http.ResponseWriter, r *http.Request) {
+ if r.Method != http.MethodDelete {
+  log.Printf("Method not allowed: %s", r.Method)
+  http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+  return
+ }
 
-	bucket := r.Header.Get("RF-BUCKET")
-	if bucket == "" {
-		log.Printf("Missing RF-BUCKET header")
-		http.Error(w, "Missing RF-BUCKET header", http.StatusBadRequest)
-		return
-	}
+ bucket := r.Header.Get("RF-BUCKET")
+ if bucket == "" {
+  log.Printf("Missing RF-BUCKET header")
+  http.Error(w, "Missing RF-BUCKET header", http.StatusBadRequest)
+  return
+ }
 
-	if !verifyAuth(r.Header.Get("Authorization"), bucket) {
-		log.Printf("Authentication failed for bucket: %s", bucket)
-		http.Error(w, "Authentication failed", http.StatusUnauthorized)
-		return
-	}
+ if !verifyAuth(r.Header.Get("Authorization"), bucket) {
+  log.Printf("Authentication failed for bucket: %s", bucket)
+  http.Error(w, "Authentication failed", http.StatusUnauthorized)
+  return
+ }
 
-	id := r.URL.Query().Get("id")
-	if id == "" {
-		log.Printf("Missing id parameter")
-		http.Error(w, "Missing id parameter", http.StatusBadRequest)
-		return
-	}
+ body, err := io.ReadAll(r.Body)
+ if err != nil {
+  log.Printf("Failed to read body: %v", err)
+  http.Error(w, "Failed to read body", http.StatusInternalServerError)
+  return
+ }
 
-	dbPath := filepath.Join(dbFolder, bucket, "relay.sqlite3")
+ var ids []string
+ if err := json.Unmarshal(body, &ids); err != nil {
+  log.Printf("Failed to parse ids: %v", err)
+  http.Error(w, "Invalid JSON format", http.StatusBadRequest)
+  return
+ }
 
-	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
-		log.Printf("No content found for bucket: %s", bucket)
-		http.Error(w, "No content found", http.StatusNotFound)
-		return
-	}
+ if len(ids) == 0 {
+  log.Printf("Empty ids array")
+  http.Error(w, "Empty ids array", http.StatusBadRequest)
+  return
+ }
 
-	db, err := sql.Open("sqlite3", dbPath + "?_auto_vacuum=1")
-	if err != nil {
-		log.Printf("Failed to open database: %v", err)
-		http.Error(w, "Failed to open database", http.StatusInternalServerError)
-		return
-	}
-	defer db.Close()
+ dbPath := filepath.Join(dbFolder, bucket, "relay.sqlite3")
 
-	_, err = db.Exec("PRAGMA journal_mode=WAL")
-	if err != nil {
-		log.Printf("Failed to set journal mode: %v", err)
-		http.Error(w, "Failed to set journal mode", http.StatusInternalServerError)
-		return
-	}
+ if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+  log.Printf("No content found for bucket: %s", bucket)
+  http.Error(w, "No content found", http.StatusNotFound)
+  return
+ }
 
-	_, err = db.Exec("PRAGMA synchronous=NORMAL")
-	if err != nil {
-		log.Printf("Failed to set synchronous mode: %v", err)
-		http.Error(w, "Failed to set synchronous mode", http.StatusInternalServerError)
-		return
-	}
+ db, err := sql.Open("sqlite3", dbPath + "?_auto_vacuum=1")
+ if err != nil {
+  log.Printf("Failed to open database: %v", err)
+  http.Error(w, "Failed to open database", http.StatusInternalServerError)
+  return
+ }
+ defer db.Close()
 
-	_, err = db.Exec("PRAGMA auto_vacuum=FULL")
-	if err != nil {
-		log.Printf("Failed to set auto vacuum mode: %v", err)
-		http.Error(w, "Failed to set auto vacuum mode", http.StatusInternalServerError)
-		return
-	}
+ _, err = db.Exec("PRAGMA journal_mode=WAL")
+ if err != nil {
+  log.Printf("Failed to set journal mode: %v", err)
+  http.Error(w, "Failed to set journal mode", http.StatusInternalServerError)
+  return
+ }
 
-	result, err := db.Exec("DELETE FROM wrap_calls WHERE id = ?", id)
-	if err != nil {
-		log.Printf("Failed to delete record: %v", err)
-		http.Error(w, "Failed to delete record", http.StatusInternalServerError)
-		return
-	}
+ _, err = db.Exec("PRAGMA synchronous=NORMAL")
+ if err != nil {
+  log.Printf("Failed to set synchronous mode: %v", err)
+  http.Error(w, "Failed to set synchronous mode", http.StatusInternalServerError)
+  return
+ }
 
-	rowsAffected, _ := result.RowsAffected()
-	if rowsAffected == 0 {
-		log.Printf("No record found with id: %s", id)
-		http.Error(w, "No record found with the given id", http.StatusNotFound)
-		return
-	}
+ _, err = db.Exec("PRAGMA auto_vacuum=FULL")
+ if err != nil {
+  log.Printf("Failed to set auto vacuum mode: %v", err)
+  http.Error(w, "Failed to set auto vacuum mode", http.StatusInternalServerError)
+  return
+ }
 
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("Record deleted successfully"))
+ placeholders := strings.Repeat("?,", len(ids))
+ placeholders = placeholders[:len(placeholders)-1]
+ query := fmt.Sprintf("DELETE FROM wrap_calls WHERE id IN (%s)", placeholders)
+
+ args := make([]interface{}, len(ids))
+ for i, id := range ids {
+  args[i] = id
+ }
+
+ result, err := db.Exec(query, args...)
+ if err != nil {
+  log.Printf("Failed to delete records: %v", err)
+  http.Error(w, "Failed to delete records", http.StatusInternalServerError)
+  return
+ }
+
+ rowsAffected, _ := result.RowsAffected()
+ if rowsAffected == 0 {
+  log.Printf("No records found with provided ids")
+  http.Error(w, "No records found with provided ids", http.StatusNotFound)
+  return
+ }
+
+ w.WriteHeader(http.StatusOK)
+ w.Write([]byte(fmt.Sprintf("%d records deleted successfully", rowsAffected)))
 }
