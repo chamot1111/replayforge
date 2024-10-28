@@ -244,143 +244,199 @@ func init() {
 		fmt.Printf("Source: %s, RelayAuthenticationBearer: %s\n", source.Name, source.RelayAuthenticationBearer)
 	}
 }
+
+var (
+	backoffDelays      = []int{1, 2, 5, 10}
+	backoffIndex       = 0
+	curBackoffToSkip   = 0
+)
+
 func OnServerHeartbeat(source Source, client *http.Client) {
-	req, err := http.NewRequest("GET", relayUrl+"first-batch?limit=10", nil)
-	if err != nil {
-		fmt.Printf("Error creating request: %v\n", err)
+	if curBackoffToSkip > 0 {
+		curBackoffToSkip--
 		return
 	}
 
-	req.Header.Set("RF-BUCKET", source.Name)
-	req.Header.Set("Authorization", "Bearer "+source.RelayAuthenticationBearer)
-
-	resp, err := client.Do(req)
-	if err != nil {
-		fmt.Printf("Error fetching from relay: %v\n", err)
-		return
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == 404 {
-		return
-	}
-	if resp.StatusCode != 200 {
-		fmt.Printf("Unexpected status code: %d\n", resp.StatusCode)
-		return
-	}
-
-	var responseBatch []map[string]interface{}
-	err = json.NewDecoder(resp.Body).Decode(&responseBatch)
-	if err != nil {
-		fmt.Printf("Error decoding response body: %v\n", err)
-		return
-	}
-	var idsToAck []string
-
-	for _, responseMap := range responseBatch {
-		id, ok := responseMap["id"].(float64)
-		if !ok {
-			fmt.Println("Error: 'id' not found in response or not a number")
-			continue
-		}
-		idStr := fmt.Sprintf("%d", int(id))
-
-		content, ok := responseMap["content"].(string)
-		if !ok {
-			fmt.Println("Error: 'content' not found in response or not a string")
-			continue
+	for {
+		req, err := http.NewRequest("GET", relayUrl+"first-batch?limit=10", nil)
+		if err != nil {
+			fmt.Printf("Error creating request: %v\n", err)
+			if backoffIndex < len(backoffDelays) {
+				curBackoffToSkip = backoffDelays[backoffIndex]
+				backoffIndex = min(backoffIndex+1, len(backoffDelays)-1)
+			}
+			return
 		}
 
-		// Process the event through Lua VM
-		source.LuaVM.Global("Process")
-		if source.LuaVM.IsFunction(-1) {
-			source.LuaVM.PushString(content)
-			source.LuaVM.PushGoFunction(func(l *lua.State) int {
-				sinkId, _ := l.ToString(1)
-				emittedContent, _ := l.ToString(2)
+		req.Header.Set("RF-BUCKET", source.Name)
+		req.Header.Set("Authorization", "Bearer "+source.RelayAuthenticationBearer)
 
-				fmt.Printf("Processed content for sink %s: %s\n", sinkId, emittedContent)
+		resp, err := client.Do(req)
+		if err != nil {
+			fmt.Printf("Error fetching from relay: %v\n", err)
+			if backoffIndex < len(backoffDelays) {
+				curBackoffToSkip = backoffDelays[backoffIndex]
+				backoffIndex = min(backoffIndex+1, len(backoffDelays)-1)
+			}
+			return
+		}
+		defer resp.Body.Close()
 
-				// Parse the processed content
-				var decodedData map[string]interface{}
-				err = json.Unmarshal([]byte(emittedContent), &decodedData)
-				if err != nil {
-					fmt.Printf("Error decoding processed JSON data: %v\n", err)
-					return 0
-				}
+		if resp.StatusCode == 404 {
+			backoffIndex = 0
+			return
+		}
+		if resp.StatusCode != 200 {
+			fmt.Printf("Unexpected status code: %d\n", resp.StatusCode)
+			if backoffIndex < len(backoffDelays) {
+				curBackoffToSkip = backoffDelays[backoffIndex]
+				backoffIndex = min(backoffIndex+1, len(backoffDelays)-1)
+			}
+			return
+		}
 
-				method, _ := decodedData["method"].(string)
-				path, _ := decodedData["path"].(string)
-				requestBody, _ := decodedData["body"].(string)
-				headers, _ := decodedData["headers"].(map[string]interface{})
-				params, _ := decodedData["params"].(map[string]interface{})
+		var responseBatch []map[string]interface{}
+		err = json.NewDecoder(resp.Body).Decode(&responseBatch)
+		if err != nil {
+			fmt.Printf("Error decoding response body: %v\n", err)
+			if backoffIndex < len(backoffDelays) {
+				curBackoffToSkip = backoffDelays[backoffIndex]
+				backoffIndex = min(backoffIndex+1, len(backoffDelays)-1)
+			}
+			return
+		}
 
-				sinkFound := false
-				for _, sink := range source.Sinks {
-					if sink.GetID() == sinkId {
-						err = sink.Execute(method, path, []byte(requestBody), headers, params)
-						if err != nil {
-							fmt.Printf("Error executing sink operation for source %s and sink %s: %v\n", source.Name, sinkId, err)
-						}
-						sinkFound = true
-						break
-					}
-				}
-				if !sinkFound {
-					fmt.Printf("Error: Sink with ID %s not found for source %s\n", sinkId, source.Name)
-				}
+		if len(responseBatch) == 0 {
+			backoffIndex = 0
+			return
+		}
 
-				return 0
-			})
+		var idsToAck []string
 
-			if err := source.LuaVM.ProtectedCall(2, 1, 0); err != nil {
-				fmt.Printf("Error calling process function for source %s: %v\n", source.Name, err)
+		for _, responseMap := range responseBatch {
+			id, ok := responseMap["id"].(float64)
+			if !ok {
+				fmt.Println("Error: 'id' not found in response or not a number")
+				continue
+			}
+			idStr := fmt.Sprintf("%d", int(id))
+
+			content, ok := responseMap["content"].(string)
+			if !ok {
+				fmt.Println("Error: 'content' not found in response or not a string")
 				continue
 			}
 
-		} else {
-			fmt.Printf("Error: 'process' function not found in Lua script for source %s\n", source.Name)
-			source.LuaVM.Pop(1)
-			continue
+			// Process the event through Lua VM
+			source.LuaVM.Global("Process")
+			if source.LuaVM.IsFunction(-1) {
+				source.LuaVM.PushString(content)
+				source.LuaVM.PushGoFunction(func(l *lua.State) int {
+					sinkId, _ := l.ToString(1)
+					emittedContent, _ := l.ToString(2)
+
+					fmt.Printf("Processed content for sink %s: %s\n", sinkId, emittedContent)
+
+					// Parse the processed content
+					var decodedData map[string]interface{}
+					err = json.Unmarshal([]byte(emittedContent), &decodedData)
+					if err != nil {
+						fmt.Printf("Error decoding processed JSON data: %v\n", err)
+						return 0
+					}
+
+					method, _ := decodedData["method"].(string)
+					path, _ := decodedData["path"].(string)
+					requestBody, _ := decodedData["body"].(string)
+					headers, _ := decodedData["headers"].(map[string]interface{})
+					params, _ := decodedData["params"].(map[string]interface{})
+
+					sinkFound := false
+					for _, sink := range source.Sinks {
+						if sink.GetID() == sinkId {
+							err = sink.Execute(method, path, []byte(requestBody), headers, params)
+							if err != nil {
+								fmt.Printf("Error executing sink operation for source %s and sink %s: %v\n", source.Name, sinkId, err)
+							}
+							sinkFound = true
+							break
+						}
+					}
+					if !sinkFound {
+						fmt.Printf("Error: Sink with ID %s not found for source %s\n", sinkId, source.Name)
+					}
+
+					return 0
+				})
+
+				if err := source.LuaVM.ProtectedCall(2, 1, 0); err != nil {
+					fmt.Printf("Error calling process function for source %s: %v\n", source.Name, err)
+					continue
+				}
+
+			} else {
+				fmt.Printf("Error: 'process' function not found in Lua script for source %s\n", source.Name)
+				source.LuaVM.Pop(1)
+				continue
+			}
+
+			idsToAck = append(idsToAck, idStr)
 		}
 
-		idsToAck = append(idsToAck, idStr)
-	}
-
-	if len(idsToAck) > 0 {
-		// Acknowledge relay server
-		ackBody, err := json.Marshal(map[string][]string{"ids": idsToAck})
-		if err != nil {
-			fmt.Printf("Error marshaling acknowledgment body: %v\n", err)
-			return
-		}
-
-		ackReq, err := http.NewRequest("DELETE", relayUrl+"acknowledge-batch", bytes.NewBuffer(ackBody))
-
-		if err != nil {
-			fmt.Printf("Error creating acknowledgment request: %v\n", err)
-			return
-		}
-		ackReq.Header.Set("RF-BUCKET", source.Name)
-		ackReq.Header.Set("Authorization", "Bearer "+source.RelayAuthenticationBearer)
-		ackReq.Header.Set("Content-Type", "application/json")
-
-		ackResp, err := client.Do(ackReq)
-		if err != nil {
-			fmt.Printf("Error sending acknowledgment: %v\n", err)
-			return
-		}
-		defer ackResp.Body.Close()
-
-		if ackResp.StatusCode != 200 {
-			fmt.Printf("Unexpected status code from acknowledgment: %d\n", ackResp.StatusCode)
-			ackRespBody, err := io.ReadAll(ackResp.Body)
+		if len(idsToAck) > 0 {
+			// Acknowledge relay server
+			ackBody, err := json.Marshal(map[string][]string{"ids": idsToAck})
 			if err != nil {
-				fmt.Printf("Error reading acknowledgment response body: %v\n", err)
+				fmt.Printf("Error marshaling acknowledgment body: %v\n", err)
+				if backoffIndex < len(backoffDelays) {
+					curBackoffToSkip = backoffDelays[backoffIndex]
+					backoffIndex = min(backoffIndex+1, len(backoffDelays)-1)
+				}
 				return
 			}
-			fmt.Printf("Acknowledgment response: %s\n", string(ackRespBody))
+
+			ackReq, err := http.NewRequest("DELETE", relayUrl+"acknowledge-batch", bytes.NewBuffer(ackBody))
+
+			if err != nil {
+				fmt.Printf("Error creating acknowledgment request: %v\n", err)
+				if backoffIndex < len(backoffDelays) {
+					curBackoffToSkip = backoffDelays[backoffIndex]
+					backoffIndex = min(backoffIndex+1, len(backoffDelays)-1)
+				}
+				return
+			}
+			ackReq.Header.Set("RF-BUCKET", source.Name)
+			ackReq.Header.Set("Authorization", "Bearer "+source.RelayAuthenticationBearer)
+			ackReq.Header.Set("Content-Type", "application/json")
+
+			ackResp, err := client.Do(ackReq)
+			if err != nil {
+				fmt.Printf("Error sending acknowledgment: %v\n", err)
+				if backoffIndex < len(backoffDelays) {
+					curBackoffToSkip = backoffDelays[backoffIndex]
+					backoffIndex = min(backoffIndex+1, len(backoffDelays)-1)
+				}
+				return
+			}
+			defer ackResp.Body.Close()
+
+			if ackResp.StatusCode != 200 {
+				fmt.Printf("Unexpected status code from acknowledgment: %d\n", ackResp.StatusCode)
+				ackRespBody, err := io.ReadAll(ackResp.Body)
+				if err != nil {
+					fmt.Printf("Error reading acknowledgment response body: %v\n", err)
+					if backoffIndex < len(backoffDelays) {
+						curBackoffToSkip = backoffDelays[backoffIndex]
+						backoffIndex = min(backoffIndex+1, len(backoffDelays)-1)
+					}
+					return
+				}
+				fmt.Printf("Acknowledgment response: %s\n", string(ackRespBody))
+			}
 		}
+
+		// Reset backoff on successful processing
+		backoffIndex = 0
 	}
 }
 
