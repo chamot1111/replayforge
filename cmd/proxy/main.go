@@ -112,6 +112,12 @@ func init() {
 		}
 	}
 
+	configDataStr, err := ProcessJSONWithEnvVars(string(configData))
+	if err != nil {
+		log.Fatalf("Failed to process config file with environment variables: %v", err)
+	}
+	configData = []byte(configDataStr)
+
 	if err := json.Unmarshal(configData, &config); err != nil {
 		log.Fatalf("Failed to parse config JSON: %v", err)
 	}
