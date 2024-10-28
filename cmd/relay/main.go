@@ -404,14 +404,16 @@ func handleAcknowledgeBatch(w http.ResponseWriter, r *http.Request) {
   return
  }
 
- var ids []string
- if err := json.Unmarshal(body, &ids); err != nil {
+ var requestBody struct {
+  Ids []string `json:"ids"`
+ }
+ if err := json.Unmarshal(body, &requestBody); err != nil {
   log.Printf("Failed to parse ids: %v", err)
   http.Error(w, "Invalid JSON format", http.StatusBadRequest)
   return
  }
 
- if len(ids) == 0 {
+ if len(requestBody.Ids) == 0 {
   log.Printf("Empty ids array")
   http.Error(w, "Empty ids array", http.StatusBadRequest)
   return

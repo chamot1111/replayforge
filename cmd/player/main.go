@@ -356,7 +356,8 @@ func OnServerHeartbeat(source Source, client *http.Client) {
 			return
 		}
 
-		ackReq, err := http.NewRequest("POST", relayUrl+"acknowledge-batch", bytes.NewBuffer(ackBody))
+		ackReq, err := http.NewRequest("DELETE", relayUrl+"acknowledge-batch", bytes.NewBuffer(ackBody))
+
 		if err != nil {
 			fmt.Printf("Error creating acknowledgment request: %v\n", err)
 			return
