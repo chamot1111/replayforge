@@ -18,6 +18,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/vjeantet/grok"
 	"tailscale.com/tsnet"
+	"github.com/chamot1111/replayforge/internal/envparser"
 )
 
 type Source struct {
@@ -63,6 +64,13 @@ func init() {
 	if err != nil {
 		panic(err)
 	}
+
+	configDataStr, err := envparser.ProcessJSONWithEnvVars(string(configData))
+	if err != nil {
+		panic(fmt.Errorf("error processing environment variables in config: %w", err))
+	}
+	configData = []byte(configDataStr)
+
 	err = json.Unmarshal(configData, &config)
 	if err != nil {
 		panic(err)

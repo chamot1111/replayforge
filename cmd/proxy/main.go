@@ -14,6 +14,7 @@ import (
 
 	"github.com/Shopify/go-lua"
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/chamot1111/replayforge/internal/envparser"
 	"tailscale.com/tsnet"
 )
 
@@ -112,7 +113,7 @@ func init() {
 		}
 	}
 
-	configDataStr, err := ProcessJSONWithEnvVars(string(configData))
+	configDataStr, err := envparser.ProcessJSONWithEnvVars(string(configData))
 	if err != nil {
 		log.Fatalf("Failed to process config file with environment variables: %v", err)
 	}

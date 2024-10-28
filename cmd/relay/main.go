@@ -15,6 +15,7 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 	"tailscale.com/tsnet"
+	"github.com/chamot1111/replayforge/internal/envparser"
 )
 
 var (
@@ -52,6 +53,13 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to read config file: %v", err)
 	}
+
+	configDataStr, err := envparser.ProcessJSONWithEnvVars(string(data))
+	if err != nil {
+		panic(fmt.Errorf("error processing environment variables in config: %w", err))
+	}
+	data = []byte(configDataStr)
+
 	if err := json.Unmarshal(data, &config); err != nil {
 		log.Fatalf("Failed to parse config file: %v", err)
 	}
