@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/json"
 	"flag"
@@ -320,7 +321,6 @@ func processEvent(event EventSource) {
 		log.Printf("Failed to run process function for source %s: %v", event.SourceID, err)
 	}
 }
-
 func sinkDbToRelayServer(sink Sink) {
 	if _, err := os.Stat(sink.DatabasePath); os.IsNotExist(err) {
 		log.Printf("Database file does not exist: %s", sink.DatabasePath)
@@ -344,7 +344,7 @@ func sinkDbToRelayServer(sink Sink) {
 	}
 
 	// Process sink_events
-	rows, err := sinkDB.Query("SELECT id, content FROM sink_events ORDER BY id ASC")
+	rows, err := sinkDB.Query("SELECT id, content FROM sink_events ORDER BY id ASC LIMIT 1000")
 	if err != nil {
 		log.Printf("Failed to query sink_events: %v", err)
 		return
@@ -352,6 +352,19 @@ func sinkDbToRelayServer(sink Sink) {
 	defer rows.Close()
 
 	var idsToDelete []int
+	var batchContent []string
+	var batchSize int
+
+	// Create HTTP client once for the whole function
+	var client *http.Client
+	if sink.UseTsnet && tsnetServer != nil {
+		client = tsnetServer.HTTPClient()
+		client.Timeout = time.Second
+	} else {
+		client = &http.Client{
+			Timeout: time.Second,
+		}
+	}
 
 	for rows.Next() {
 		var id int
@@ -363,10 +376,28 @@ func sinkDbToRelayServer(sink Sink) {
 			continue
 		}
 
-		if err := sendContent(sink, content); err != nil {
-			log.Printf("Failed to send content: %v", err)
-		} else {
-			idsToDelete = append(idsToDelete, id)
+		batchContent = append(batchContent, content)
+		batchSize += len(content)
+		idsToDelete = append(idsToDelete, id)
+
+		// Send batch if we hit max events or size limit
+		if len(batchContent) >= 10 || batchSize >= 500*1024 {
+			if err := sendBatchContent(sink, batchContent, client); err != nil {
+				log.Printf("Failed to send batch content: %v", err)
+				// Remove successful IDs from idsToDelete
+				idsToDelete = idsToDelete[len(batchContent):]
+			}
+			batchContent = nil
+			batchSize = 0
+		}
+	}
+
+	// Send any remaining content
+	if len(batchContent) > 0 {
+		if err := sendBatchContent(sink, batchContent, client); err != nil {
+			log.Printf("Failed to send remaining batch content: %v", err)
+			// Remove successful IDs from idsToDelete
+			idsToDelete = idsToDelete[len(batchContent):]
 		}
 	}
 
@@ -379,28 +410,22 @@ func sinkDbToRelayServer(sink Sink) {
 	}
 }
 
-func sendContent(sink Sink, content string) error {
+func sendBatchContent(sink Sink, contents []string, client *http.Client) error {
 	if sink.URL == relayURLSpecialValue {
-		fmt.Printf("Debug: Sending content to stdout: %s\n", content)
+		for _, content := range contents {
+			fmt.Printf("Debug: Sending content to stdout: %s\n", content)
+		}
 		return nil
 	}
 
-	fmt.Printf("Debug: Sending content: %s\n", content)
-
-	var client *http.Client
-	var req *http.Request
-	var err error
-
-	if sink.UseTsnet && tsnetServer != nil {
-		client = tsnetServer.HTTPClient()
-		client.Timeout = time.Second
-	} else {
-		client = &http.Client{
-			Timeout: time.Second,
-		}
+	batchJSON, err := json.Marshal(contents)
+	if err != nil {
+		return fmt.Errorf("failed to marshal batch content: %v", err)
 	}
 
-	req, err = http.NewRequest("POST", sink.URL+"record", strings.NewReader(content))
+	fmt.Printf("Debug: Sending batch content: %s\n", string(batchJSON))
+
+	req, err := http.NewRequest("POST", sink.URL+"record-batch", bytes.NewReader(batchJSON))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %v", err)
 	}

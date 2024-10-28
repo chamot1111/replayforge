@@ -85,6 +85,7 @@ func main() {
 
 	// Main server loop would go here
 	http.HandleFunc("/record", handleRecord)
+	http.HandleFunc("/record-batch", handleRecordBatch)
 	http.HandleFunc("/first", handleFirst)
 	http.HandleFunc("/acknowledge", handleAcknowledge)
 
@@ -238,6 +239,126 @@ func handleRecord(w http.ResponseWriter, r *http.Request) {
 				log.Printf("Failed to delete expired records for bucket %s: %v", bucket, err)
 			}
 		}
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
+func handleRecordBatch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		log.Printf("Method not allowed: %s", r.Method)
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		log.Printf("Failed to read body: %v", err)
+		http.Error(w, "Failed to read body", http.StatusInternalServerError)
+		return
+	}
+
+	var events []string
+	if err := json.Unmarshal(body, &events); err != nil {
+		log.Printf("Failed to parse events: %v", err)
+		http.Error(w, "Invalid JSON format", http.StatusBadRequest)
+		return
+	}
+	buckets := strings.Split(r.Header.Get("RF-BUCKETS"), ",")
+	exceededBuckets := []string{}
+
+	for _, bucket := range buckets {
+		bucket = strings.TrimSpace(bucket)
+		if !verifyAuth(r.Header.Get("Authorization"), bucket) {
+			log.Printf("Authentication failed for bucket: %s", bucket)
+			http.Error(w, "Authentication failed", http.StatusUnauthorized)
+			return
+		}
+
+		bucketConfig := config.Buckets[bucket]
+		dbFolderBucket := filepath.Join(dbFolder, bucket)
+		dbPath := filepath.Join(dbFolderBucket, "relay.sqlite3")
+
+		stat, err := os.Stat(dbPath)
+		if err == nil && stat.Size() > int64(bucketConfig.DbMaxSizeKb*1024/2) {
+			// Try to vacuum the database to reclaim space
+			db, err := sql.Open("sqlite3", dbPath + "?_auto_vacuum=1")
+			if err == nil {
+				_, vacErr := db.Exec("VACUUM")
+				db.Close()
+				if vacErr == nil {
+					// Check size again after vacuum
+					newStat, err := os.Stat(dbPath)
+					if err == nil && newStat.Size() > int64(bucketConfig.DbMaxSizeKb*1024/2) {
+						log.Printf("Database size before vacuum: %d, after vacuum: %d, still exceeds limit for bucket: %s", stat.Size(), newStat.Size(), bucket)
+						exceededBuckets = append(exceededBuckets, bucket)
+						continue
+					}
+				} else {
+					log.Printf("Failed to vacuum database for bucket %s: %v", bucket, vacErr)
+					http.Error(w, "Failed to vacuum database", http.StatusInternalServerError)
+					return
+				}
+			} else {
+				log.Printf("Database size limit exceeded for bucket: %s", bucket)
+				exceededBuckets = append(exceededBuckets, bucket)
+				continue
+			}
+		}
+
+		err = os.MkdirAll(dbFolderBucket, 0755)
+		if err != nil {
+			log.Printf("Failed to create database folder for bucket %s: %v", bucket, err)
+			http.Error(w, "Failed to create database folder", http.StatusInternalServerError)
+			return
+		}
+
+		db, err := sql.Open("sqlite3", dbPath + "?_auto_vacuum=1")
+		if err != nil {
+			log.Printf("Failed to open database for bucket %s: %v", bucket, err)
+			http.Error(w, "Failed to open database", http.StatusInternalServerError)
+			return
+		}
+		defer db.Close()
+
+		tx, err := db.Begin()
+		if err != nil {
+			log.Printf("Failed to begin transaction for bucket %s: %v", bucket, err)
+			http.Error(w, "Failed to begin transaction", http.StatusInternalServerError)
+			return
+		}
+
+		stmt, err := tx.Prepare("INSERT INTO wrap_calls (content, timestamp) VALUES (?, ?)")
+		if err != nil {
+			tx.Rollback()
+			log.Printf("Failed to prepare statement for bucket %s: %v", bucket, err)
+			http.Error(w, "Failed to prepare statement", http.StatusInternalServerError)
+			return
+		}
+		defer stmt.Close()
+
+		timestamp := time.Now().Unix()
+		for _, event := range events {
+			_, err = stmt.Exec(event, timestamp)
+			if err != nil {
+				tx.Rollback()
+				log.Printf("Failed to insert event for bucket %s: %v", bucket, err)
+				http.Error(w, "Failed to insert event", http.StatusInternalServerError)
+				return
+			}
+		}
+
+		if err = tx.Commit(); err != nil {
+			log.Printf("Failed to commit transaction for bucket %s: %v", bucket, err)
+			http.Error(w, "Failed to commit transaction", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	if len(exceededBuckets) > 0 {
+		log.Printf("Database size limit exceeded for buckets: %v", exceededBuckets)
+		http.Error(w, fmt.Sprintf("Database size limit exceeded for buckets: %v", exceededBuckets), http.StatusTooManyRequests)
+		return
 	}
 
 	w.WriteHeader(http.StatusOK)
