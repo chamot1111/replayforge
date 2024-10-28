@@ -455,13 +455,12 @@ func handleAcknowledgeBatch(w http.ResponseWriter, r *http.Request) {
   http.Error(w, "Failed to set auto vacuum mode", http.StatusInternalServerError)
   return
  }
-
- placeholders := strings.Repeat("?,", len(ids))
+ placeholders := strings.Repeat("?,", len(requestBody.Ids))
  placeholders = placeholders[:len(placeholders)-1]
  query := fmt.Sprintf("DELETE FROM wrap_calls WHERE id IN (%s)", placeholders)
 
- args := make([]interface{}, len(ids))
- for i, id := range ids {
+ args := make([]interface{}, len(requestBody.Ids))
+ for i, id := range requestBody.Ids {
   args[i] = id
  }
 
