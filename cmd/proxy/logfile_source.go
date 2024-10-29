@@ -53,8 +53,13 @@ func (l *LogFileSource) Init(config SourceConfig, eventChan chan<- EventSource) 
 
 func (l *LogFileSource) Start() error {
 	l.lastPosition = 0
-	go l.readLogFile()
-	return nil
+    go func() {
+        for {
+            l.readLogFile()
+            time.Sleep(10 * time.Second)
+        }
+    }()
+    return nil
 }
 
 func (l *LogFileSource) Stop() error {
