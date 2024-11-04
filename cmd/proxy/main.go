@@ -227,30 +227,13 @@ func init() {
 
 func setupSql(dbPath string, canVacuum bool) (*sql.DB, error, bool) {
 	info, err := os.Stat(dbPath)
-	if err == nil && info.Size() > maxDbSize && canVacuum {
-		log.Printf("Attempting to vacuum database: %s", dbPath)
-
-		tempDB, err := sql.Open("sqlite3", dbPath+"?_auto_vacuum=1")
-		tempDB.Exec("PRAGMA journal_mode=WAL")
-		tempDB.Exec("PRAGMA synchronous=NORMAL")
-		if err == nil {
-			tempDB.Exec("VACUUM")
-			tempDB.Close()
-			info, _ = os.Stat(dbPath)
-		}
+	if err == nil && info.Size() > maxDbSize {
+		return nil, fmt.Errorf("database size (%d bytes) exceeded maximum limit (%d bytes)", info.Size(), maxDbSize), true
 	}
 
-	db, err := sql.Open("sqlite3", dbPath+"?_auto_vacuum=1")
+	db, err := sql.Open("sqlite3", dbPath+"?_auto_vacuum=2&_journal_mode=WAL&_synchronous=NORMAL")
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %v", err), false
-	}
-
-	db.Exec("PRAGMA auto_vacuum = FULL")
-	db.Exec("PRAGMA journal_mode=WAL")
-	db.Exec("PRAGMA synchronous=NORMAL")
-
-	if info != nil && info.Size() > maxDbSize && canVacuum {
-		return db, fmt.Errorf("database size (%d bytes) exceeded maximum limit (%d bytes)", info.Size(), maxDbSize), true
 	}
 
 	return db, nil, false
@@ -323,6 +306,7 @@ func processEvent(event EventSource) {
 		log.Printf("Failed to run process function for source %s: %v", event.SourceID, err)
 	}
 }
+
 func sinkDbToRelayServer(sink Sink) {
 	if _, err := os.Stat(sink.DatabasePath); os.IsNotExist(err) {
 		log.Printf("Database file does not exist: %s", sink.DatabasePath)
@@ -335,15 +319,6 @@ func sinkDbToRelayServer(sink Sink) {
 		return
 	}
 	defer sinkDB.Close()
-
-	currentTime := time.Now()
-	if lastVacuumTime, ok := lastVacuumTimes[sink.ID]; !ok || currentTime.Sub(lastVacuumTime) >= time.Hour {
-		_, err = sinkDB.Exec("VACUUM")
-		if err != nil {
-			log.Printf("Failed to vacuum database: %v", err)
-		}
-		lastVacuumTimes[sink.ID] = currentTime
-	}
 
 	// Process sink_events
 	rows, err := sinkDB.Query("SELECT id, content FROM sink_events ORDER BY id ASC LIMIT 1000")
