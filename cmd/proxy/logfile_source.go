@@ -1,3 +1,5 @@
+package main
+
 import (
 	"bufio"
 	"crypto/md5"

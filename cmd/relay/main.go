@@ -1,7 +1,6 @@
 package main
 
 import (
-	"strconv"
 	"database/sql"
 	"encoding/json"
 	"flag"
@@ -11,12 +10,13 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/chamot1111/replayforge/internal/envparser"
 	_ "github.com/mattn/go-sqlite3"
 	"tailscale.com/tsnet"
-	"github.com/chamot1111/replayforge/internal/envparser"
 )
 
 var (
@@ -162,29 +162,9 @@ func handleRecordBatch(w http.ResponseWriter, r *http.Request) {
 
 		stat, err := os.Stat(dbPath)
 		if err == nil && stat.Size() > int64(bucketConfig.DbMaxSizeKb*1024/2) {
-			// Try to vacuum the database to reclaim space
-			db, err := sql.Open("sqlite3", dbPath + "?_auto_vacuum=1")
-			if err == nil {
-				_, vacErr := db.Exec("VACUUM")
-				db.Close()
-				if vacErr == nil {
-					// Check size again after vacuum
-					newStat, err := os.Stat(dbPath)
-					if err == nil && newStat.Size() > int64(bucketConfig.DbMaxSizeKb*1024/2) {
-						log.Printf("Database size before vacuum: %d, after vacuum: %d, still exceeds limit for bucket: %s", stat.Size(), newStat.Size(), bucket)
-						exceededBuckets = append(exceededBuckets, bucket)
-						continue
-					}
-				} else {
-					log.Printf("Failed to vacuum database for bucket %s: %v", bucket, vacErr)
-					http.Error(w, "Failed to vacuum database", http.StatusInternalServerError)
-					return
-				}
-			} else {
-				log.Printf("Database size limit exceeded for bucket: %s", bucket)
-				exceededBuckets = append(exceededBuckets, bucket)
-				continue
-			}
+			log.Printf("Database size limit exceeded for bucket: %s", bucket)
+			exceededBuckets = append(exceededBuckets, bucket)
+			continue
 		}
 
 		err = os.MkdirAll(dbFolderBucket, 0755)
@@ -194,7 +174,7 @@ func handleRecordBatch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		db, err := sql.Open("sqlite3", dbPath + "?_auto_vacuum=1&_journal_mode=WAL&_synchronous=NORMAL")
+		db, err := sql.Open("sqlite3", dbPath+"?_auto_vacuum=1&_journal_mode=WAL&_synchronous=NORMAL")
 		if err != nil {
 			log.Printf("Failed to open database for bucket %s: %v", bucket, err)
 			http.Error(w, "Failed to open database", http.StatusInternalServerError)
@@ -268,216 +248,175 @@ func handleRecordBatch(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleFirstBatch(w http.ResponseWriter, r *http.Request) {
- if r.Method != http.MethodGet {
-  log.Printf("Method not allowed: %s", r.Method)
-  http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-  return
- }
+	if r.Method != http.MethodGet {
+		log.Printf("Method not allowed: %s", r.Method)
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 
- bucket := r.Header.Get("RF-BUCKET")
- if bucket == "" {
-  log.Printf("Missing RF-BUCKET header")
-  http.Error(w, "Missing RF-BUCKET header", http.StatusBadRequest)
-  return
- }
+	bucket := r.Header.Get("RF-BUCKET")
+	if bucket == "" {
+		log.Printf("Missing RF-BUCKET header")
+		http.Error(w, "Missing RF-BUCKET header", http.StatusBadRequest)
+		return
+	}
 
- if !verifyAuth(r.Header.Get("Authorization"), bucket) {
-  log.Printf("Authentication failed for bucket: %s", bucket)
-  http.Error(w, "Authentication failed", http.StatusUnauthorized)
-  return
- }
+	if !verifyAuth(r.Header.Get("Authorization"), bucket) {
+		log.Printf("Authentication failed for bucket: %s", bucket)
+		http.Error(w, "Authentication failed", http.StatusUnauthorized)
+		return
+	}
 
- limitStr := r.URL.Query().Get("limit")
- limit := 100 // Default limit
- if limitStr != "" {
-  parsedLimit, err := strconv.Atoi(limitStr)
-  if err != nil || parsedLimit <= 0 {
-   log.Printf("Invalid limit parameter: %s", limitStr)
-   http.Error(w, "Invalid limit parameter", http.StatusBadRequest)
-   return
-  }
-  if parsedLimit < limit {
-   limit = parsedLimit
-  }
- }
+	limitStr := r.URL.Query().Get("limit")
+	limit := 100 // Default limit
+	if limitStr != "" {
+		parsedLimit, err := strconv.Atoi(limitStr)
+		if err != nil || parsedLimit <= 0 {
+			log.Printf("Invalid limit parameter: %s", limitStr)
+			http.Error(w, "Invalid limit parameter", http.StatusBadRequest)
+			return
+		}
+		if parsedLimit < limit {
+			limit = parsedLimit
+		}
+	}
 
- dbPath := filepath.Join(dbFolder, bucket, "relay.sqlite3")
+	dbPath := filepath.Join(dbFolder, bucket, "relay.sqlite3")
 
- if _, err := os.Stat(dbPath); os.IsNotExist(err) {
-  log.Printf("No content found for bucket: %s", bucket)
-  http.Error(w, "No content found", http.StatusNotFound)
-  return
- }
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+		log.Printf("No content found for bucket: %s", bucket)
+		http.Error(w, "No content found", http.StatusNotFound)
+		return
+	}
 
- db, err := sql.Open("sqlite3", dbPath + "?_auto_vacuum=1")
- if err != nil {
-  log.Printf("Failed to open database: %v", err)
-  http.Error(w, "Failed to open database", http.StatusInternalServerError)
-  return
- }
- defer db.Close()
+	db, err := sql.Open("sqlite3", dbPath+"?_auto_vacuum=1&_journal_mode=WAL&_synchronous=NORMAL")
+	if err != nil {
+		log.Printf("Failed to open database: %v", err)
+		http.Error(w, "Failed to open database", http.StatusInternalServerError)
+		return
+	}
+	defer db.Close()
 
- _, err = db.Exec("PRAGMA journal_mode=WAL")
- if err != nil {
-  log.Printf("Failed to set journal mode: %v", err)
-  http.Error(w, "Failed to set journal mode", http.StatusInternalServerError)
-  return
- }
+	rows, err := db.Query(`
+								SELECT id, content
+								FROM wrap_calls
+								ORDER BY id ASC
+								LIMIT ?
+				`, limit)
+	if err != nil {
+		log.Printf("Failed to query database: %v", err)
+		http.Error(w, "Failed to query database", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
 
- _, err = db.Exec("PRAGMA synchronous=NORMAL")
- if err != nil {
-  log.Printf("Failed to set synchronous mode: %v", err)
-  http.Error(w, "Failed to set synchronous mode", http.StatusInternalServerError)
-  return
- }
+	var results []map[string]interface{}
+	for rows.Next() {
+		var id int
+		var content string
+		if err := rows.Scan(&id, &content); err != nil {
+			log.Printf("Failed to scan row: %v", err)
+			http.Error(w, "Failed to scan row", http.StatusInternalServerError)
+			return
+		}
+		results = append(results, map[string]interface{}{
+			"id":      id,
+			"content": content,
+		})
+	}
 
- _, err = db.Exec("PRAGMA auto_vacuum=FULL")
- if err != nil {
-  log.Printf("Failed to set auto vacuum mode: %v", err)
-  http.Error(w, "Failed to set auto vacuum mode", http.StatusInternalServerError)
-  return
- }
+	if len(results) == 0 {
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte("[]"))
+		return
+	}
 
- rows, err := db.Query(`
-        SELECT id, content
-        FROM wrap_calls
-        ORDER BY id ASC
-        LIMIT ?
-    `, limit)
- if err != nil {
-  log.Printf("Failed to query database: %v", err)
-  http.Error(w, "Failed to query database", http.StatusInternalServerError)
-  return
- }
- defer rows.Close()
-
- var results []map[string]interface{}
- for rows.Next() {
-  var id int
-  var content string
-  if err := rows.Scan(&id, &content); err != nil {
-   log.Printf("Failed to scan row: %v", err)
-   http.Error(w, "Failed to scan row", http.StatusInternalServerError)
-   return
-  }
-  results = append(results, map[string]interface{}{
-   "id":      id,
-   "content": content,
-  })
- }
-
- if len(results) == 0 {
-  w.WriteHeader(http.StatusNotFound)
-  w.Write([]byte("[]"))
-  return
- }
-
- w.Header().Set("Content-Type", "application/json")
- w.WriteHeader(http.StatusOK)
- json.NewEncoder(w).Encode(results)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(results)
 }
 
 func handleAcknowledgeBatch(w http.ResponseWriter, r *http.Request) {
- if r.Method != http.MethodDelete {
-  log.Printf("Method not allowed: %s", r.Method)
-  http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-  return
- }
+	if r.Method != http.MethodDelete {
+		log.Printf("Method not allowed: %s", r.Method)
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 
- bucket := r.Header.Get("RF-BUCKET")
- if bucket == "" {
-  log.Printf("Missing RF-BUCKET header")
-  http.Error(w, "Missing RF-BUCKET header", http.StatusBadRequest)
-  return
- }
+	bucket := r.Header.Get("RF-BUCKET")
+	if bucket == "" {
+		log.Printf("Missing RF-BUCKET header")
+		http.Error(w, "Missing RF-BUCKET header", http.StatusBadRequest)
+		return
+	}
 
- if !verifyAuth(r.Header.Get("Authorization"), bucket) {
-  log.Printf("Authentication failed for bucket: %s", bucket)
-  http.Error(w, "Authentication failed", http.StatusUnauthorized)
-  return
- }
+	if !verifyAuth(r.Header.Get("Authorization"), bucket) {
+		log.Printf("Authentication failed for bucket: %s", bucket)
+		http.Error(w, "Authentication failed", http.StatusUnauthorized)
+		return
+	}
 
- body, err := io.ReadAll(r.Body)
- if err != nil {
-  log.Printf("Failed to read body: %v", err)
-  http.Error(w, "Failed to read body", http.StatusInternalServerError)
-  return
- }
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		log.Printf("Failed to read body: %v", err)
+		http.Error(w, "Failed to read body", http.StatusInternalServerError)
+		return
+	}
 
- var requestBody struct {
-  Ids []string `json:"ids"`
- }
- if err := json.Unmarshal(body, &requestBody); err != nil {
-  log.Printf("Failed to parse ids: %v", err)
-  http.Error(w, "Invalid JSON format", http.StatusBadRequest)
-  return
- }
+	var requestBody struct {
+		Ids []string `json:"ids"`
+	}
+	if err := json.Unmarshal(body, &requestBody); err != nil {
+		log.Printf("Failed to parse ids: %v", err)
+		http.Error(w, "Invalid JSON format", http.StatusBadRequest)
+		return
+	}
 
- if len(requestBody.Ids) == 0 {
-  log.Printf("Empty ids array")
-  http.Error(w, "Empty ids array", http.StatusBadRequest)
-  return
- }
+	if len(requestBody.Ids) == 0 {
+		log.Printf("Empty ids array")
+		http.Error(w, "Empty ids array", http.StatusBadRequest)
+		return
+	}
 
- dbPath := filepath.Join(dbFolder, bucket, "relay.sqlite3")
+	dbPath := filepath.Join(dbFolder, bucket, "relay.sqlite3")
 
- if _, err := os.Stat(dbPath); os.IsNotExist(err) {
-  log.Printf("No content found for bucket: %s", bucket)
-  http.Error(w, "No content found", http.StatusNotFound)
-  return
- }
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+		log.Printf("No content found for bucket: %s", bucket)
+		http.Error(w, "No content found", http.StatusNotFound)
+		return
+	}
 
- db, err := sql.Open("sqlite3", dbPath + "?_auto_vacuum=1")
- if err != nil {
-  log.Printf("Failed to open database: %v", err)
-  http.Error(w, "Failed to open database", http.StatusInternalServerError)
-  return
- }
- defer db.Close()
+	db, err := sql.Open("sqlite3", dbPath+"?_auto_vacuum=1&_journal_mode=WAL&_synchronous=NORMAL")
+	if err != nil {
+		log.Printf("Failed to open database: %v", err)
+		http.Error(w, "Failed to open database", http.StatusInternalServerError)
+		return
+	}
+	defer db.Close()
 
- _, err = db.Exec("PRAGMA journal_mode=WAL")
- if err != nil {
-  log.Printf("Failed to set journal mode: %v", err)
-  http.Error(w, "Failed to set journal mode", http.StatusInternalServerError)
-  return
- }
+	placeholders := strings.Repeat("?,", len(requestBody.Ids))
+	placeholders = placeholders[:len(placeholders)-1]
+	query := fmt.Sprintf("DELETE FROM wrap_calls WHERE id IN (%s)", placeholders)
 
- _, err = db.Exec("PRAGMA synchronous=NORMAL")
- if err != nil {
-  log.Printf("Failed to set synchronous mode: %v", err)
-  http.Error(w, "Failed to set synchronous mode", http.StatusInternalServerError)
-  return
- }
+	args := make([]interface{}, len(requestBody.Ids))
+	for i, id := range requestBody.Ids {
+		args[i] = id
+	}
 
- _, err = db.Exec("PRAGMA auto_vacuum=FULL")
- if err != nil {
-  log.Printf("Failed to set auto vacuum mode: %v", err)
-  http.Error(w, "Failed to set auto vacuum mode", http.StatusInternalServerError)
-  return
- }
- placeholders := strings.Repeat("?,", len(requestBody.Ids))
- placeholders = placeholders[:len(placeholders)-1]
- query := fmt.Sprintf("DELETE FROM wrap_calls WHERE id IN (%s)", placeholders)
+	result, err := db.Exec(query, args...)
+	if err != nil {
+		log.Printf("Failed to delete records: %v", err)
+		http.Error(w, "Failed to delete records", http.StatusInternalServerError)
+		return
+	}
 
- args := make([]interface{}, len(requestBody.Ids))
- for i, id := range requestBody.Ids {
-  args[i] = id
- }
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		log.Printf("No records found with provided ids")
+		http.Error(w, "No records found with provided ids", http.StatusNotFound)
+		return
+	}
 
- result, err := db.Exec(query, args...)
- if err != nil {
-  log.Printf("Failed to delete records: %v", err)
-  http.Error(w, "Failed to delete records", http.StatusInternalServerError)
-  return
- }
-
- rowsAffected, _ := result.RowsAffected()
- if rowsAffected == 0 {
-  log.Printf("No records found with provided ids")
-  http.Error(w, "No records found with provided ids", http.StatusNotFound)
-  return
- }
-
- w.WriteHeader(http.StatusOK)
- w.Write([]byte(fmt.Sprintf("%d records deleted successfully", rowsAffected)))
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(fmt.Sprintf("%d records deleted successfully", rowsAffected)))
 }
