@@ -17,6 +17,8 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/chamot1111/replayforge/internal/envparser"
 	"tailscale.com/tsnet"
+
+	"github.com/chamot1111/replayforge/lualibs"
 )
 
 const (
@@ -188,7 +190,7 @@ func init() {
 		vm := lua.NewState()
 		lua.OpenLibraries(vm)
 
-		RegisterLuaLibs(vm)
+		lualibs.RegisterLuaLibs(vm)
 
 		if sourceConfig.TransformScript != "" {
 			script, err := os.ReadFile(sourceConfig.TransformScript)

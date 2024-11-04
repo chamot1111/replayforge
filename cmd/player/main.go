@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/chamot1111/replayforge/playerplugin"
+	"github.com/chamot1111/replayforge/lualibs"
 
 	"github.com/Shopify/go-lua"
 	"github.com/chamot1111/replayforge/internal/envparser"
@@ -21,7 +22,6 @@ import (
 	"github.com/vjeantet/grok"
 	"tailscale.com/tsnet"
 )
-
 type Source struct {
 	Name                      string
 	RelayAuthenticationBearer string
@@ -32,7 +32,7 @@ type Source struct {
 type SourceConfig struct {
 	Name                      string   `json:"name"`
 	RelayAuthenticationBearer string   `json:"relayAuthenticationBearer"`
-	LuaScript                 string   `json:"luaScript"`
+	TransformScript           string   `json:"transformScript"`
 	Sinks                     []string `json:"sinks"`
 }
 
@@ -51,6 +51,7 @@ var (
 	relayUrl            string
 	sources             []Source
 	sinks               map[string]playerplugin.Sink
+	sinkChannels        map[string]chan string
 	useTsnet            bool
 	tsnetHostname       string
 	globalExposedPort   int
@@ -92,14 +93,14 @@ func init() {
 				var sc SourceConfig
 				sc.Name = sourceMap["name"].(string)
 				sc.RelayAuthenticationBearer = sourceMap["relayAuthenticationBearer"].(string)
-				if luaScript, ok := sourceMap["luaScript"].(string); ok {
-					sc.LuaScript = luaScript
+				if transformScript, ok := sourceMap["transformScript"].(string); ok {
+					sc.TransformScript = transformScript
 				} else if sinks, ok := sourceMap["sinks"].([]interface{}); ok {
 					for _, sink := range sinks {
 						sc.Sinks = append(sc.Sinks, sink.(string))
 					}
 				} else {
-					panic(fmt.Sprintf("Source %s must have either 'luaScript' or 'sinks' defined", sc.Name))
+					panic(fmt.Sprintf("Source %s must have either 'transformScript' or 'sinks' defined", sc.Name))
 				}
 				sourcesConfig = append(sourcesConfig, sc)
 			}
@@ -117,7 +118,10 @@ func init() {
 	if err != nil {
 		panic(fmt.Sprintf("Failed to unmarshal sinks config: %v", err))
 	}
+
 	sinks = make(map[string]playerplugin.Sink)
+	sinkChannels = make(map[string]chan string)
+
 	for _, sc := range sinksConfig {
 		var sink playerplugin.Sink
 		switch sc.Type {
@@ -127,6 +131,8 @@ func init() {
 			sink = &SqliteSink{}
 		case "log":
 			sink = &LogSink{}
+		case "notification":
+			sink = &NotificationSink{}
 		default:
 			// Try to load a plugin for unknown sink types
 			pluginPath := fmt.Sprintf("./%s_sink.so", sc.Type)
@@ -155,6 +161,7 @@ func init() {
 		}
 
 		sinks[sc.Name] = sink
+		sinkChannels[sc.Name] = make(chan string, 1000)
 	}
 
 	for sinkName, _ := range sinks {
@@ -170,6 +177,7 @@ func init() {
 		// Initialize Lua VM
 		source.LuaVM = lua.NewState()
 		lua.OpenLibraries(source.LuaVM)
+		lualibs.RegisterLuaLibs(source.LuaVM)
 
 		// Register grok parser
 		g, _ := grok.NewWithConfig(&grok.Config{NamedCapturesOnly: true})
@@ -190,18 +198,28 @@ func init() {
 			}
 			return 1
 		})
-		// Load the Lua script or use default script
-		if sc.LuaScript == "" {
+
+		// Load the Lua script from file or use default script
+		var scriptContent string
+		if sc.TransformScript == "" {
 			// Create default Lua script that emits content to all configured sinks
 			defaultScript := "function Process(content, emit)\n"
 			for _, sinkName := range sc.Sinks {
 				defaultScript += fmt.Sprintf("    emit('%s', content)\n", sinkName)
 			}
 			defaultScript += "end"
-			sc.LuaScript = defaultScript
+			scriptContent = defaultScript
+		} else {
+			scriptBytes, err := os.ReadFile(sc.TransformScript)
+			if err != nil {
+				panic(fmt.Sprintf("Failed to read transform script file %s: %v", sc.TransformScript, err))
+			}
+			scriptContent = string(scriptBytes)
 		}
-		if err := lua.DoString(source.LuaVM, sc.LuaScript); err != nil {
-			panic(fmt.Sprintf("Failed to load Lua script for source %s: %v", source.Name, err))
+
+		if err := lua.DoString(source.LuaVM, scriptContent); err != nil {
+			luaError := fmt.Sprintf("Failed to load Lua script for source %s with error: %v\nScript contents:\n%s", source.Name, err, scriptContent)
+			panic(luaError)
 		}
 
 		// Call init function if it exists
@@ -246,9 +264,9 @@ func init() {
 }
 
 var (
-	backoffDelays      = []int{1, 2, 5, 10}
-	backoffIndex       = 0
-	curBackoffToSkip   = 0
+	backoffDelays    = []int{1, 2, 5, 10}
+	backoffIndex     = 0
+	curBackoffToSkip = 0
 )
 
 func OnServerHeartbeat(source Source, client *http.Client) {
@@ -337,33 +355,10 @@ func OnServerHeartbeat(source Source, client *http.Client) {
 
 					fmt.Printf("Processed content for sink %s: %s\n", sinkId, emittedContent)
 
-					// Parse the processed content
-					var decodedData map[string]interface{}
-					err = json.Unmarshal([]byte(emittedContent), &decodedData)
-					if err != nil {
-						fmt.Printf("Error decoding processed JSON data: %v\n", err)
-						return 0
-					}
-
-					method, _ := decodedData["method"].(string)
-					path, _ := decodedData["path"].(string)
-					requestBody, _ := decodedData["body"].(string)
-					headers, _ := decodedData["headers"].(map[string]interface{})
-					params, _ := decodedData["params"].(map[string]interface{})
-
-					sinkFound := false
-					for _, sink := range source.Sinks {
-						if sink.GetID() == sinkId {
-							err = sink.Execute(method, path, []byte(requestBody), headers, params)
-							if err != nil {
-								fmt.Printf("Error executing sink operation for source %s and sink %s: %v\n", source.Name, sinkId, err)
-							}
-							sinkFound = true
-							break
-						}
-					}
-					if !sinkFound {
-						fmt.Printf("Error: Sink with ID %s not found for source %s\n", sinkId, source.Name)
+					if ch, ok := sinkChannels[sinkId]; ok {
+						ch <- emittedContent
+					} else {
+						fmt.Printf("Error: Sink channel with ID %s not found\n", sinkId)
 					}
 
 					return 0
@@ -478,6 +473,34 @@ func main() {
 		}()
 	}
 
+	for sinkName, sink := range sinks {
+		sinkName := sinkName // Shadow variable to avoid closure issues
+		sink := sink
+
+		go func(sinkName string, sink playerplugin.Sink) {
+			ch := sinkChannels[sinkName]
+			for msg := range ch {
+				var decodedData map[string]interface{}
+				err := json.Unmarshal([]byte(msg), &decodedData)
+				if err != nil {
+					fmt.Printf("Error decoding processed JSON data: %v\n", err)
+					continue
+				}
+
+				method, _ := decodedData["method"].(string)
+				path, _ := decodedData["path"].(string)
+				requestBody, _ := decodedData["body"].(string)
+				headers, _ := decodedData["headers"].(map[string]interface{})
+				params, _ := decodedData["params"].(map[string]interface{})
+
+				err = sink.Execute(method, path, []byte(requestBody), headers, params, sinkChannels)
+				if err != nil {
+					fmt.Printf("Error executing sink operation: %v\n", err)
+				}
+			}
+		}(sinkName, sink)
+	}
+
 	ticker := time.NewTicker(time.Duration(heartbeatIntervalMs) * time.Millisecond)
 	defer ticker.Stop()
 
@@ -485,5 +508,6 @@ func main() {
 		for _, source := range sources {
 			OnServerHeartbeat(source, client)
 		}
+
 	}
 }

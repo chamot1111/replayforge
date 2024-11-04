@@ -33,7 +33,7 @@ func (s *HttpSink) Start() error {
 	return nil
 }
 
-func (s *HttpSink) Execute(method, path string, body []byte, headers map[string]interface{}, params map[string]interface{}) error {
+func (s *HttpSink) Execute(method, path string, body []byte, headers map[string]interface{}, params map[string]interface{}, sinkChannels map[string]chan string) error {
 	targetUrl := s.TargetHost + path
 	client := &http.Client{}
 

@@ -52,7 +52,7 @@ func (s *LogSink) Start() error {
 	return nil
 }
 
-func (s *LogSink) Execute(method, path string, body []byte, headers map[string]interface{}, params map[string]interface{}) error {
+func (s *LogSink) Execute(method, path string, body []byte, headers map[string]interface{}, params map[string]interface{}, sinkChannels map[string]chan string) error {
 	s.logger.Printf("Method: %s\n", method)
 	s.logger.Printf("Path: %s\n", path)
 	s.logger.Printf("Body: %s\n", string(body))

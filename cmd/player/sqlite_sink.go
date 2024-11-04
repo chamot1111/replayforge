@@ -83,7 +83,7 @@ func (s *SqliteSink) Start() error {
 	return nil
 }
 
-func (s *SqliteSink) Execute(method, path string, body []byte, headers map[string]interface{}, params map[string]interface{}) error {
+func (s *SqliteSink) Execute(method, path string, body []byte, headers map[string]interface{}, params map[string]interface{}, sinkChannels map[string]chan string) error {
 	if !strings.HasPrefix(path, "/rpf-db") {
 		return nil
 	}

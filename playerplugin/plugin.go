@@ -16,11 +16,10 @@ type SinkConfig struct {
 	LuaScript string       `json:"luaScript"`
 }
 
-
 type Sink interface {
 	Init(config SinkConfig) error
 	Start() error
-	Execute(method, path string, body []byte, headers map[string]interface{}, params map[string]interface{}) error
+	Execute(method, path string, body []byte, headers map[string]interface{}, params map[string]interface{}, sinkChannels map[string]chan string) error
 	Close() error
 	GetID() string
 	GetExposedPort() (int, bool)
