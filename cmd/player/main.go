@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chamot1111/replayforge/playerplugin"
 	"github.com/chamot1111/replayforge/lualibs"
+	"github.com/chamot1111/replayforge/playerplugin"
 
 	"github.com/Shopify/go-lua"
 	"github.com/chamot1111/replayforge/internal/envparser"
@@ -22,11 +22,14 @@ import (
 	"github.com/vjeantet/grok"
 	"tailscale.com/tsnet"
 )
+
 type Source struct {
 	Name                      string
 	RelayAuthenticationBearer string
 	LuaVM                     *lua.State
 	Sinks                     []playerplugin.Sink
+	HookInterval              time.Duration
+	LastHookTime             time.Time
 }
 
 type SourceConfig struct {
@@ -34,6 +37,7 @@ type SourceConfig struct {
 	RelayAuthenticationBearer string   `json:"relayAuthenticationBearer"`
 	TransformScript           string   `json:"transformScript"`
 	Sinks                     []string `json:"sinks"`
+	HookInterval              string   `json:"hookInterval"`
 }
 
 type SinkConfig struct {
@@ -57,6 +61,52 @@ var (
 	globalExposedPort   int
 	globalListenAddress string
 )
+
+func timerHandler(sourceID string) {
+	var source *Source
+	for i := range sources {
+		if sources[i].Name == sourceID {
+			source = &sources[i]
+			break
+		}
+	}
+	if source == nil {
+		fmt.Printf("Source %s not found\n", sourceID)
+		return
+	}
+
+	// Check if it's time to run the hook based on interval
+	if time.Since(source.LastHookTime) < source.HookInterval {
+		return
+	}
+	source.LastHookTime = time.Now()
+
+	// Check if timer_handler exists
+	source.LuaVM.Global("timer_handler")
+	if !source.LuaVM.IsFunction(-1) {
+		source.LuaVM.Pop(1)
+		return
+	}
+
+	// Push emit function
+	source.LuaVM.PushGoFunction(func(l *lua.State) int {
+		sinkId, _ := l.ToString(1)
+		emittedContent, _ := l.ToString(2)
+
+		fmt.Printf("Timer emitted content for sink %s: %s\n", sinkId, emittedContent)
+
+		if ch, ok := sinkChannels[sinkId]; ok {
+			ch <- emittedContent
+		} else {
+			fmt.Printf("Error: Sink channel with ID %s not found\n", sinkId)
+		}
+		return 0
+	})
+
+	if err := source.LuaVM.ProtectedCall(1, 0, 0); err != nil {
+		fmt.Printf("Error executing timer_handler for source %s: %v\n", source.Name, err)
+	}
+}
 
 func init() {
 	flag.StringVar(&configPath, "c", "config.json", "Path to the configuration file")
@@ -101,6 +151,9 @@ func init() {
 					}
 				} else {
 					panic(fmt.Sprintf("Source %s must have either 'transformScript' or 'sinks' defined", sc.Name))
+				}
+				if hookInterval, ok := sourceMap["hookInterval"].(string); ok {
+					sc.HookInterval = hookInterval
 				}
 				sourcesConfig = append(sourcesConfig, sc)
 			}
@@ -172,6 +225,14 @@ func init() {
 		source := Source{
 			Name:                      sc.Name,
 			RelayAuthenticationBearer: sc.RelayAuthenticationBearer,
+		}
+
+		if sc.HookInterval != "" {
+			duration, err := time.ParseDuration(sc.HookInterval)
+			if err != nil {
+				panic(fmt.Sprintf("Invalid hook interval for source %s: %v", sc.Name, err))
+			}
+			source.HookInterval = duration
 		}
 
 		// Initialize Lua VM
@@ -454,7 +515,6 @@ func main() {
 			sinkID := strings.TrimPrefix(r.URL.Path, "/")
 			if sink, ok := sinks[sinkID]; ok {
 				if port, exposed := sink.GetExposedPort(); exposed {
-					// target := fmt.Sprintf("http://localhost:%d", port)
 					proxy := httputil.NewSingleHostReverseProxy(&url.URL{Scheme: "http", Host: fmt.Sprintf("localhost:%d", port)})
 					proxy.ServeHTTP(w, r)
 				} else {
@@ -507,7 +567,9 @@ func main() {
 	for range ticker.C {
 		for _, source := range sources {
 			OnServerHeartbeat(source, client)
+			if source.HookInterval > 0 {
+				timerHandler(source.Name)
+			}
 		}
-
 	}
 }
