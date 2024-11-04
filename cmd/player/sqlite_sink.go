@@ -72,8 +72,8 @@ func (s *SqliteSink) Init(config playerplugin.SinkConfig) error {
 func (s *SqliteSink) Start() error {
 	// Start HTTP server
 	mux := http.NewServeMux()
-	mux.HandleFunc("/rpf-db/", s.handleGetRequest)
-	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir(s.StaticDir))))
+	mux.HandleFunc(fmt.Sprintf("/%s/rpf-db/", s.ID), s.handleGetRequest)
+	mux.Handle(fmt.Sprintf("/%s/static/", s.ID), http.StripPrefix(fmt.Sprintf("/%s/static/", s.ID), http.FileServer(http.Dir(s.StaticDir))))
 	log.Printf("Starting HTTP server on %s", s.ListenAddr)
 	go func() {
 		srv := &http.Server{
