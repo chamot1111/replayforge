@@ -529,7 +529,7 @@ func main() {
 	}
 
 	// Create a reverse proxy if globalExposedPort and globalListenAddress are defined
-	if globalExposedPort != 0 && globalListenAddress != "" {
+	if globalExposedPort != 0 {
 		mux := http.NewServeMux()
 
 		// Serve static files if path is configured
