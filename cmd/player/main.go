@@ -23,7 +23,6 @@ import (
 	"github.com/vjeantet/grok"
 	"tailscale.com/tsnet"
 )
-
 type Source struct {
 	Name                      string
 	RelayAuthenticationBearer string
@@ -50,10 +49,10 @@ type SinkConfig struct {
 }
 
 var (
-	configPath          string
-	config              map[string]interface{}
-	heartbeatIntervalMs = 1000
-	maxDbSize           = 100 * 1024 * 1024 // 100 MB
+	configPath           string
+	config               map[string]interface{}
+	heartbeatIntervalMs  = 1000
+	maxDbSize            = 100 * 1024 * 1024 // 100 MB
 	relayUrl            string
 	sources             []Source
 	sinks               map[string]playerplugin.Sink
@@ -63,6 +62,7 @@ var (
 	globalExposedPort   int
 	globalListenAddress string
 	listenUsingTailscale bool
+	staticFolderPath     string
 )
 
 func timerHandler(sourceID string) {
@@ -145,6 +145,11 @@ func init() {
 	// Get listenUsingTailscale from config
 	if val, ok := config["listenUsingTailscale"].(bool); ok {
 		listenUsingTailscale = val
+	}
+
+	// Get static folder path from config
+	if val, ok := config["staticFolderPath"].(string); ok {
+		staticFolderPath = val
 	}
 
 	var sourcesConfig []SourceConfig
@@ -526,6 +531,13 @@ func main() {
 	// Create a reverse proxy if globalExposedPort and globalListenAddress are defined
 	if globalExposedPort != 0 && globalListenAddress != "" {
 		mux := http.NewServeMux()
+
+		// Serve static files if path is configured
+		if staticFolderPath != "" {
+			fs := http.FileServer(http.Dir(staticFolderPath))
+			mux.Handle("/static/", http.StripPrefix("/static/", fs))
+		}
+
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 			sinkID := strings.TrimPrefix(r.URL.Path, "/")
 			if sink, ok := sinks[sinkID]; ok {
