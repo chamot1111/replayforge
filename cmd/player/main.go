@@ -538,6 +538,12 @@ func main() {
 			mux.Handle("/static/", http.StripPrefix("/static/", fs))
 		}
 
+		// Add ping route for testing
+		mux.HandleFunc("/ping", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("pong"))
+		})
+
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 			sinkID := strings.TrimPrefix(r.URL.Path, "/")
 			if sink, ok := sinks[sinkID]; ok {
@@ -553,7 +559,11 @@ func main() {
 		})
 
 		go func() {
-			fmt.Printf("Starting reverse proxy on %s:%d\n", globalListenAddress, globalExposedPort)
+			if listenUsingTailscale && useTsnet {
+				fmt.Printf("Starting reverse proxy using Tailscale on %s:%d\n", globalListenAddress, globalExposedPort)
+			} else {
+				fmt.Printf("Starting reverse proxy on %s:%d\n", globalListenAddress, globalExposedPort)
+			}
 			srv := &http.Server{
 				Addr:    fmt.Sprintf("%s:%d", globalListenAddress, globalExposedPort),
 				Handler: mux,
