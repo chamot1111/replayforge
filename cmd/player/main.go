@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/chamot1111/replayforge/lualibs"
@@ -29,7 +30,8 @@ type Source struct {
 	LuaVM                     *lua.State
 	Sinks                     []playerplugin.Sink
 	HookInterval              time.Duration
-	LastHookTime             time.Time
+	LastHookTime              time.Time
+	mu                        sync.Mutex
 }
 
 type SourceConfig struct {
@@ -74,6 +76,9 @@ func timerHandler(sourceID string) {
 		fmt.Printf("Source %s not found\n", sourceID)
 		return
 	}
+
+	source.mu.Lock()
+	defer source.mu.Unlock()
 
 	// Check if it's time to run the hook based on interval
 	if time.Since(source.LastHookTime) < source.HookInterval {
@@ -331,6 +336,9 @@ var (
 )
 
 func OnServerHeartbeat(source Source, client *http.Client) {
+	source.mu.Lock()
+	defer source.mu.Unlock()
+
 	if curBackoffToSkip > 0 {
 		curBackoffToSkip--
 		return
@@ -561,15 +569,26 @@ func main() {
 		}(sinkName, sink)
 	}
 
+	for _, source := range sources {
+		source := source // Shadow variable to avoid closure issues
+		if source.HookInterval > 0 {
+			go func() {
+				ticker := time.NewTicker(source.HookInterval)
+				defer ticker.Stop()
+
+				for range ticker.C {
+					timerHandler(source.Name)
+				}
+			}()
+		}
+	}
+
 	ticker := time.NewTicker(time.Duration(heartbeatIntervalMs) * time.Millisecond)
 	defer ticker.Stop()
 
 	for range ticker.C {
 		for _, source := range sources {
 			OnServerHeartbeat(source, client)
-			if source.HookInterval > 0 {
-				timerHandler(source.Name)
-			}
 		}
 	}
 }
