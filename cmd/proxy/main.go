@@ -456,7 +456,7 @@ func timerHandler(sourceID string) {
 		return
 	}
 
-	vm.Global("timer_handler")
+	vm.Global("TimerHandler")
 	if !vm.IsFunction(-1) {
 		vm.Pop(1)
 		return

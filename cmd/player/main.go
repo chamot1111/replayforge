@@ -87,7 +87,7 @@ func timerHandler(sourceID string) {
 	source.LastHookTime = time.Now()
 
 	// Check if timer_handler exists
-	source.LuaVM.Global("timer_handler")
+	source.LuaVM.Global("TimerHandler")
 	if !source.LuaVM.IsFunction(-1) {
 		source.LuaVM.Pop(1)
 		return
