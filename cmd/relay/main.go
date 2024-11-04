@@ -84,11 +84,11 @@ func main() {
 		log.Printf("      DB Max Size: %d KB", bucketConfig.DbMaxSizeKb)
 		log.Printf("      Time to Live: %d seconds", bucketConfig.Tls)
 	}
-
-	// Main server loop would go here
-	http.HandleFunc("/record-batch", handleRecordBatch)
-	http.HandleFunc("/first-batch", handleFirstBatch)
-	http.HandleFunc("/acknowledge-batch", handleAcknowledgeBatch)
+	// Create a new serve mux
+	mux := http.NewServeMux()
+	mux.HandleFunc("/record-batch", handleRecordBatch)
+	mux.HandleFunc("/first-batch", handleFirstBatch)
+	mux.HandleFunc("/acknowledge-batch", handleAcknowledgeBatch)
 
 	if config.UseTailnet {
 		hostname := "relay-forwarder"
@@ -107,10 +107,10 @@ func main() {
 		defer ln.Close()
 
 		log.Printf("Listening on Tailscale network on port %d", port)
-		log.Fatal(http.Serve(ln, nil))
+		log.Fatal(http.Serve(ln, mux))
 	} else {
 		log.Printf("Listening on port %d", port)
-		log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", port), nil))
+		log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", port), mux))
 	}
 }
 

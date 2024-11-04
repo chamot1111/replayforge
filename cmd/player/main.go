@@ -62,6 +62,7 @@ var (
 	tsnetHostname       string
 	globalExposedPort   int
 	globalListenAddress string
+	listenUsingTailscale bool
 )
 
 func timerHandler(sourceID string) {
@@ -139,6 +140,11 @@ func init() {
 	if tsnetConfig, ok := config["tsnet"].(map[string]interface{}); ok {
 		useTsnet = true
 		tsnetHostname = tsnetConfig["hostname"].(string)
+	}
+
+	// Get listenUsingTailscale from config
+	if val, ok := config["listenUsingTailscale"].(bool); ok {
+		listenUsingTailscale = val
 	}
 
 	var sourcesConfig []SourceConfig
@@ -519,7 +525,8 @@ func main() {
 
 	// Create a reverse proxy if globalExposedPort and globalListenAddress are defined
 	if globalExposedPort != 0 && globalListenAddress != "" {
-		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 			sinkID := strings.TrimPrefix(r.URL.Path, "/")
 			if sink, ok := sinks[sinkID]; ok {
 				if port, exposed := sink.GetExposedPort(); exposed {
@@ -535,8 +542,23 @@ func main() {
 
 		go func() {
 			fmt.Printf("Starting reverse proxy on %s:%d\n", globalListenAddress, globalExposedPort)
-			if err := http.ListenAndServe(fmt.Sprintf("%s:%d", globalListenAddress, globalExposedPort), nil); err != nil {
-				fmt.Printf("Error starting reverse proxy: %v\n", err)
+			srv := &http.Server{
+				Addr:    fmt.Sprintf("%s:%d", globalListenAddress, globalExposedPort),
+				Handler: mux,
+			}
+			if listenUsingTailscale && useTsnet {
+				ln, err := s.Listen("tcp", srv.Addr)
+				if err != nil {
+					fmt.Printf("Error creating tailscale listener: %v\n", err)
+					return
+				}
+				if err := srv.Serve(ln); err != nil {
+					fmt.Printf("Error serving through tailscale: %v\n", err)
+				}
+			} else {
+				if err := srv.ListenAndServe(); err != nil {
+					fmt.Printf("Error starting reverse proxy: %v\n", err)
+				}
 			}
 		}()
 	}

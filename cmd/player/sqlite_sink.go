@@ -71,11 +71,16 @@ func (s *SqliteSink) Init(config playerplugin.SinkConfig) error {
 
 func (s *SqliteSink) Start() error {
 	// Start HTTP server
-	http.HandleFunc("/rpf-db/", s.handleGetRequest)
-	http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir(s.StaticDir))))
+	mux := http.NewServeMux()
+	mux.HandleFunc("/rpf-db/", s.handleGetRequest)
+	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir(s.StaticDir))))
 	log.Printf("Starting HTTP server on %s", s.ListenAddr)
 	go func() {
-		err := http.ListenAndServe(s.ListenAddr, nil)
+		srv := &http.Server{
+			Addr:    s.ListenAddr,
+			Handler: mux,
+		}
+		err := srv.ListenAndServe()
 		if err != nil {
 			log.Fatalf("Failed to start HTTP server: %v", err)
 		}
