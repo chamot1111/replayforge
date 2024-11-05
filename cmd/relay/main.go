@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -27,6 +28,7 @@ var (
 	config     Config
 	startTime  = time.Now()
 	statsMutex sync.RWMutex
+	enablePprof bool
 )
 
 type BucketConfig struct {
@@ -60,6 +62,8 @@ func init() {
 	if logLevel != "" {
 		logger.SetLogLevel(logLevel)
 	}
+
+	enablePprof = os.Getenv("ENABLE_PPROF") == "true"
 
 	flag.StringVar(&configPath, "c", "", "Path to config file")
 	flag.IntVar(&port, "p", 8081, "Port to listen on")
@@ -140,6 +144,14 @@ func main() {
 	mux.HandleFunc("/record-batch", handleRecordBatch)
 	mux.HandleFunc("/first-batch", handleFirstBatch)
 	mux.HandleFunc("/acknowledge-batch", handleAcknowledgeBatch)
+
+	// Start pprof server if enabled
+	if enablePprof {
+		go func() {
+			logger.Info("Starting pprof server on :6060")
+			logger.Error("pprof server error: %v", http.ListenAndServe("localhost:6060", nil))
+		}()
+	}
 
 	// Start status server
 	if config.PortStatusZ > 0 {
