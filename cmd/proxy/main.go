@@ -175,6 +175,8 @@ func init() {
 			source = &LogFileSource{}
 		case "repeatfile":
 			source = &RepeatFileSource{}
+		case "pgcall":
+			source = &PgCallSource{}
 		default:
 			logger.Fatal("Unsupported source type: %s", sourceConfig.Type)
 		}
