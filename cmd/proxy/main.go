@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Shopify/go-lua"
@@ -77,6 +78,30 @@ type Config struct {
 	Sources       []json.RawMessage
 	Sinks         []Sink
 	TsnetHostname string `json:"tsnetHostname"`
+	PortStatusZ   int    `json:"portStatusZ"`
+}
+
+type Stats struct {
+	sync.RWMutex
+	Sources map[string]SourceStats
+	Sinks   map[string]SinkStats
+	Started time.Time
+}
+
+type SourceStats struct {
+	Type               string
+	ID                 string
+	MessagesByMinute   int
+	MessagesSinceStart int64
+	LastMessageDate    time.Time
+}
+
+type SinkStats struct {
+	ID                 string
+	URL                string
+	MessagesByMinute   int
+	MessagesSinceStart int64
+	LastMessageDate    time.Time
 }
 
 var (
@@ -89,9 +114,16 @@ var (
 	lastVacuumTimes     map[string]time.Time
 	sinkChannels        map[string]chan string
 	tsnetServer         *tsnet.Server
+	stats               Stats
 )
 
 func init() {
+	stats = Stats{
+		Sources: make(map[string]SourceStats),
+		Sinks:   make(map[string]SinkStats),
+		Started: time.Now(),
+	}
+
 	logLevel := os.Getenv("LOG_LEVEL")
 	if logLevel != "" {
 		logger.SetLogLevel(logLevel)
@@ -155,6 +187,13 @@ func init() {
 			}
 		}
 		db.Close()
+
+		stats.Lock()
+		stats.Sinks[sink.ID] = SinkStats{
+			ID:  sink.ID,
+			URL: sink.URL,
+		}
+		stats.Unlock()
 	}
 
 	if config.TsnetHostname != "" {
@@ -188,8 +227,22 @@ func init() {
 
 		sources[sourceConfig.ID] = source
 
+		stats.Lock()
+		stats.Sources[sourceConfig.ID] = SourceStats{
+			Type: sourceConfig.Type,
+			ID:   sourceConfig.ID,
+		}
+		stats.Unlock()
+
 		go func(s Source, ch <-chan EventSource) {
 			for event := range ch {
+				stats.Lock()
+				sourceStats := stats.Sources[event.SourceID]
+				sourceStats.MessagesByMinute++
+				sourceStats.MessagesSinceStart++
+				sourceStats.LastMessageDate = time.Now()
+				stats.Sources[event.SourceID] = sourceStats
+				stats.Unlock()
 				processEvent(event)
 			}
 		}(source, eventChan)
@@ -230,17 +283,41 @@ func init() {
 
 		vms[sourceConfig.ID] = vm
 	}
+
+	// Start goroutine to reset messages per minute
+	go func() {
+		for {
+			time.Sleep(time.Minute)
+			stats.Lock()
+			for id := range stats.Sources {
+				source := stats.Sources[id]
+				source.MessagesByMinute = 0
+				stats.Sources[id] = source
+			}
+			for id := range stats.Sinks {
+				sink := stats.Sinks[id]
+				sink.MessagesByMinute = 0
+				stats.Sinks[id] = sink
+			}
+			stats.Unlock()
+		}
+	}()
 }
 
 func setupSql(dbPath string, canVacuum bool) (*sql.DB, error, bool) {
 	info, err := os.Stat(dbPath)
+	var errDbSize error
 	if err == nil && info.Size() > maxDbSize {
-		return nil, fmt.Errorf("database size (%d bytes) exceeded maximum limit (%d bytes)", info.Size(), maxDbSize), true
+		errDbSize = fmt.Errorf("database size (%d bytes) exceeded maximum limit (%d bytes)", info.Size(), maxDbSize)
 	}
 
 	db, err := sql.Open("sqlite3", dbPath+"?_auto_vacuum=2&_journal_mode=WAL&_synchronous=NORMAL")
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %v", err), false
+	}
+
+	if errDbSize != nil {
+		return db, errDbSize, true
 	}
 
 	return db, nil, false
@@ -302,6 +379,13 @@ func processEvent(event EventSource) {
 		sinkID, _ := l.ToString(-2)
 		emittedContent, _ := l.ToString(-1)
 		if ch, ok := sinkChannels[sinkID]; ok {
+			stats.Lock()
+			sinkStats := stats.Sinks[sinkID]
+			sinkStats.MessagesByMinute++
+			sinkStats.MessagesSinceStart++
+			sinkStats.LastMessageDate = time.Now()
+			stats.Sinks[sinkID] = sinkStats
+			stats.Unlock()
 			ch <- emittedContent
 		} else {
 			logger.Warn("Sink channel not found for sink %s", sinkID)
@@ -557,6 +641,25 @@ func main() {
 				}
 			}(sourceConfig)
 		}
+	}
+
+	if config.PortStatusZ > 0 {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/statusz", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			stats.RLock()
+			defer stats.RUnlock()
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"sources": stats.Sources,
+				"sinks":   stats.Sinks,
+				"uptime":  time.Since(stats.Started).String(),
+			})
+		})
+		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/plain")
+			w.Write([]byte("ok"))
+		})
+		go http.ListenAndServe(fmt.Sprintf(":%d", config.PortStatusZ), mux)
 	}
 
 	select {}
