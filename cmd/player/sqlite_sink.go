@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"strconv"
-	"github.com/chamot1111/replayforge/playerplugin"
+	"github.com/chamot1111/replayforge/pkgs/playerplugin"
 	"github.com/chamot1111/replayforge/pkgs/logger"
 
 	_ "github.com/mattn/go-sqlite3"

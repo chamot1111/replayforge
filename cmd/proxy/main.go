@@ -17,7 +17,7 @@ import (
 	"github.com/chamot1111/replayforge/internal/envparser"
 	"tailscale.com/tsnet"
 
-	"github.com/chamot1111/replayforge/lualibs"
+	"github.com/chamot1111/replayforge/pkgs/lualibs"
 	"github.com/chamot1111/replayforge/pkgs/logger"
 )
 

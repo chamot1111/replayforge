@@ -6,7 +6,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"github.com/chamot1111/replayforge/playerplugin"
+	"github.com/chamot1111/replayforge/pkgs/playerplugin"
 	"github.com/chamot1111/replayforge/pkgs/logger"
 )
 

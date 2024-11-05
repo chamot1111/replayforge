@@ -2,7 +2,7 @@ go 1.23.2
 
 use (
 	.
-	./playerplugin
-	./lualibs
+	./pkgs/playerplugin
+	./pkgs/lualibs
 	./pkgs/logger
 )

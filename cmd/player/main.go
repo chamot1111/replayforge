@@ -14,8 +14,8 @@ import (
 	"time"
 	"fmt"
 
-	"github.com/chamot1111/replayforge/lualibs"
-	"github.com/chamot1111/replayforge/playerplugin"
+	"github.com/chamot1111/replayforge/pkgs/lualibs"
+	"github.com/chamot1111/replayforge/pkgs/playerplugin"
 	"github.com/chamot1111/replayforge/pkgs/logger"
 
 	"github.com/Shopify/go-lua"
