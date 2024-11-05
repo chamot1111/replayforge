@@ -17,6 +17,10 @@ type PgCall struct {
 type PgCallSource struct {
     BaseSource
     Interval    time.Duration
+    Host        string
+    User        string
+    Password    string
+    Database    string
     ConnString  string
     Calls       []PgCall
     EventChan   chan<- EventSource
@@ -26,6 +30,10 @@ func (h *PgCallSource) Init(config SourceConfig, eventChan chan<- EventSource) e
     var sourceConfig struct {
         Params struct {
             IntervalSeconds int      `json:"intervalSeconds"`
+            Host           string    `json:"host"`
+            User           string    `json:"user"`
+            Password       string    `json:"password"`
+            Database       string    `json:"database"`
             ConnString     string    `json:"connString"`
             Calls          []PgCall  `json:"calls"`
         } `json:"params"`
@@ -35,6 +43,10 @@ func (h *PgCallSource) Init(config SourceConfig, eventChan chan<- EventSource) e
     }
     h.BaseSource = config.BaseSource
     h.Interval = time.Duration(sourceConfig.Params.IntervalSeconds) * time.Second
+    h.Host = sourceConfig.Params.Host
+    h.User = sourceConfig.Params.User
+    h.Password = sourceConfig.Params.Password
+    h.Database = sourceConfig.Params.Database
     h.ConnString = sourceConfig.Params.ConnString
     h.Calls = sourceConfig.Params.Calls
     h.EventChan = eventChan
@@ -62,7 +74,13 @@ func (h *PgCallSource) pollDatabase() {
 }
 
 func (h *PgCallSource) executeCalls() error {
-    db, err := sql.Open("postgres", h.ConnString)
+    connStr := h.ConnString
+    if connStr == "" {
+        connStr = fmt.Sprintf("host=%s user=%s password=%s dbname=%s sslmode=disable",
+            h.Host, h.User, h.Password, h.Database)
+    }
+
+    db, err := sql.Open("postgres", connStr)
     if err != nil {
         return fmt.Errorf("error connecting to database: %v", err)
     }
