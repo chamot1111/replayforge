@@ -19,10 +19,16 @@ const (
 	LogLevelTrace
 )
 
+type logEntry struct {
+	message   string
+	timestamp time.Time
+}
+
 var (
 	currentLogLevel LogLevel
 	mu             sync.Mutex
 	logger         *log.Logger
+	logHistory     map[LogLevel][]logEntry
 )
 
 // Configuration structure
@@ -33,6 +39,7 @@ type Config struct {
 }
 
 func init() {
+	logHistory = make(map[LogLevel][]logEntry)
 	// Configuration par défaut
 	Configure(Config{
 		Level:      "info",
@@ -82,9 +89,43 @@ func Configure(config Config) {
 func SetLogLevel(level string) {
 	Configure(Config{Level: level})
 }
+func shouldLog(level LogLevel, msg string) bool {
+	mu.Lock()
+	defer mu.Unlock()
+
+	entries := logHistory[level]
+	now := time.Now()
+
+	// Clean old messages and check if message exists in recent history
+	var validEntries []logEntry
+	for _, entry := range entries {
+		if now.Sub(entry.timestamp) < 5*time.Second {
+			if entry.message == msg {
+				return false
+			}
+			validEntries = append(validEntries, entry)
+		}
+	}
+
+	// Add new entry
+	newEntry := logEntry{message: msg, timestamp: now}
+	if len(validEntries) >= 5 {
+		logHistory[level] = append(validEntries[1:], newEntry)
+	} else {
+		logHistory[level] = append(validEntries, newEntry)
+	}
+
+	return true
+}
 
 func logMsg(level LogLevel, format string, v ...interface{}) {
 	if level <= currentLogLevel {
+		msg := fmt.Sprintf(format, v...)
+
+		if !shouldLog(level, msg) {
+			return
+		}
+
 		mu.Lock()
 		defer mu.Unlock()
 
@@ -102,7 +143,6 @@ func logMsg(level LogLevel, format string, v ...interface{}) {
 			levelStr = "ERROR"
 		}
 
-		msg := fmt.Sprintf(format, v...)
 		logger.Printf("[%s] %s | %s", time.Now().Format("2006-01-02 15:04:05"), levelStr, msg)
 	}
 }
