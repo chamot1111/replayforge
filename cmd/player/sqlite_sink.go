@@ -242,7 +242,7 @@ func (s *SqliteSink) handleDelete(table string, body []byte) error {
 }
 
 func (s *SqliteSink) handleGetRequest(w http.ResponseWriter, r *http.Request) {
-	table := strings.TrimPrefix(r.URL.Path, "/rpf-db/")
+	table := strings.TrimPrefix(r.URL.Path, fmt.Sprintf("/%s/rpf-db/", s.ID))
 	query := fmt.Sprintf("SELECT * FROM %s", table)
 
 	// Parse query parameters
