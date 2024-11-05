@@ -58,7 +58,7 @@ func (s *SqliteSink) Init(config playerplugin.SinkConfig) error {
 		return fmt.Errorf("static_dir not found in params or not a string")
 	}
 
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := sql.Open("sqlite3", dbPath+"?_auto_vacuum=1&_journal_mode=WAL&_synchronous=NORMAL")
 	if err != nil {
 		return fmt.Errorf("failed to open database: %v", err)
 	}
