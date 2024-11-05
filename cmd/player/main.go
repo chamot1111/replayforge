@@ -545,7 +545,10 @@ func main() {
 		})
 
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			sinkID := strings.TrimPrefix(r.URL.Path, "/")
+			path := strings.TrimPrefix(r.URL.Path, "/")
+			parts := strings.SplitN(path, "/", 2)
+			sinkID := parts[0]
+
 			if sink, ok := sinks[sinkID]; ok {
 				if port, exposed := sink.GetExposedPort(); exposed {
 					proxy := httputil.NewSingleHostReverseProxy(&url.URL{Scheme: "http", Host: fmt.Sprintf("localhost:%d", port)})
