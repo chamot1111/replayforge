@@ -51,6 +51,12 @@ const (
 `
 )
 
+var (
+ sinkBackoffDelays = make(map[string]time.Duration)
+ maxBackoffDelay = 300 * time.Second
+ initialBackoffDelay = 100 * time.Millisecond
+)
+
 type BaseSource struct {
 	ID              string `json:"id"`
 	Type            string `json:"type"`
@@ -194,6 +200,10 @@ func init() {
 			URL: sink.URL,
 		}
 		stats.Unlock()
+	}
+
+	for i := range config.Sinks {
+		sinkBackoffDelays[config.Sinks[i].ID] = initialBackoffDelay
 	}
 
 	if config.TsnetHostname != "" {
@@ -398,16 +408,16 @@ func processEvent(event EventSource) {
 	}
 }
 
-func sinkDbToRelayServer(sink Sink) {
+func sinkDbToRelayServer(sink Sink) error {
 	if _, err := os.Stat(sink.DatabasePath); os.IsNotExist(err) {
 		logger.Info("Database file does not exist: %s", sink.DatabasePath)
-		return
+		return nil
 	}
 
 	sinkDB, err, _ := setupSql(sink.DatabasePath, false)
 	if err != nil {
 		logger.Error("Failed to open sink database: %v", err)
-		return
+		return err
 	}
 	defer sinkDB.Close()
 
@@ -415,7 +425,7 @@ func sinkDbToRelayServer(sink Sink) {
 	rows, err := sinkDB.Query("SELECT id, content FROM sink_events ORDER BY id ASC LIMIT 1000")
 	if err != nil {
 		logger.Error("Failed to query sink_events: %v", err)
-		return
+		return err
 	}
 	defer rows.Close()
 
@@ -454,6 +464,7 @@ func sinkDbToRelayServer(sink Sink) {
 				logger.Error("Failed to send batch content: %v", err)
 				// Remove successful IDs from idsToDelete
 				idsToDelete = idsToDelete[len(batchContent):]
+				return err
 			}
 			batchContent = nil
 			batchSize = 0
@@ -466,6 +477,7 @@ func sinkDbToRelayServer(sink Sink) {
 			logger.Error("Failed to send remaining batch content: %v", err)
 			// Remove successful IDs from idsToDelete
 			idsToDelete = idsToDelete[len(batchContent):]
+			return err
 		}
 	}
 
@@ -474,8 +486,11 @@ func sinkDbToRelayServer(sink Sink) {
 		_, err = sinkDB.Exec(query)
 		if err != nil {
 			logger.Error("Failed to delete records from sink_events: %v", err)
+			return err
 		}
 	}
+
+	return nil
 }
 
 func sendBatchContent(sink Sink, contents []string, client *http.Client) error {
@@ -623,8 +638,17 @@ func main() {
 	for _, sink := range config.Sinks {
 		go func(s Sink) {
 			for {
-				sinkDbToRelayServer(s)
-				time.Sleep(time.Duration(heartbeatIntervalMs) * time.Millisecond)
+				err := sinkDbToRelayServer(s)
+				if err != nil {
+					sinkBackoffDelays[s.ID] = time.Duration(float64(sinkBackoffDelays[s.ID]) * 2)
+					if sinkBackoffDelays[s.ID] > maxBackoffDelay {
+						sinkBackoffDelays[s.ID] = maxBackoffDelay
+					}
+					time.Sleep(sinkBackoffDelays[s.ID])
+				} else {
+					sinkBackoffDelays[s.ID] = initialBackoffDelay
+					time.Sleep(time.Duration(heartbeatIntervalMs) * time.Millisecond)
+				}
 			}
 		}(sink)
 	}
