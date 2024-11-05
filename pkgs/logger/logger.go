@@ -17,6 +17,7 @@ const (
 	LogLevelInfo
 	LogLevelDebug
 	LogLevelTrace
+	messageExpirationSeconds = 30
 )
 
 type logEntry struct {
@@ -99,7 +100,7 @@ func shouldLog(level LogLevel, msg string) bool {
 	// Clean old messages and check if message exists in recent history
 	var validEntries []logEntry
 	for _, entry := range entries {
-		if now.Sub(entry.timestamp) < 5*time.Second {
+		if now.Sub(entry.timestamp) < time.Duration(messageExpirationSeconds)*time.Second {
 			if entry.message == msg {
 				return false
 			}
