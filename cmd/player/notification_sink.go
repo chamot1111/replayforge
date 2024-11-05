@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"io"
 	"github.com/chamot1111/replayforge/playerplugin"
+	"github.com/chamot1111/replayforge/pkgs/logger"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -73,15 +74,15 @@ func (s *NotificationSink) Init(config playerplugin.SinkConfig) error {
 	s.ID = config.ID
 
 	// Display the config to console
-	fmt.Printf("NotificationSink Configuration:\n")
-	fmt.Printf("ID: %s\n", s.ID)
-	fmt.Printf("Webhook Configs:\n")
+	logger.Info("NotificationSink Configuration:")
+	logger.Info("ID: %s", s.ID)
+	logger.Info("Webhook Configs:")
 	for name, webhook := range s.WebhookConfigs {
-		fmt.Printf("  %s:\n", name)
-		fmt.Printf("    URL: %s\n", webhook.URL)
-		fmt.Printf("    Method: %s\n", webhook.Method)
-		fmt.Printf("    Content-Type: %s\n", webhook.ContentType)
-		fmt.Printf("    Headers: %v\n", webhook.Header)
+		logger.Info("  %s:", name)
+		logger.Info("    URL: %s", webhook.URL)
+		logger.Info("    Method: %s", webhook.Method)
+		logger.Info("    Content-Type: %s", webhook.ContentType)
+		logger.Info("    Headers: %v", webhook.Header)
 	}
 
 	return nil
@@ -164,51 +165,51 @@ func (s *NotificationSink) handlePost(body []byte) error {
 }
 
 func (s *NotificationSink) sendWebhook(webhookName string, webhook WebhookConfig, payload string) error {
- client := &http.Client{}
- method := webhook.Method
- if method == "" {
-  method = "POST"
- }
+	client := &http.Client{}
+	method := webhook.Method
+	if method == "" {
+		method = "POST"
+	}
 
- req, err := http.NewRequest(method, webhook.URL, strings.NewReader(payload))
- if err != nil {
-  return fmt.Errorf("failed to create request: %v", err)
- }
+	req, err := http.NewRequest(method, webhook.URL, strings.NewReader(payload))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %v", err)
+	}
 
- if webhook.ContentType != "" {
+	if webhook.ContentType != "" {
 	contentType := "text/plain"
 	if webhook.ContentType == "json" {
-	  contentType = "application/json"
+			contentType = "application/json"
 	} else if webhook.ContentType == "plain" {
-	  contentType = "text/plain"
+			contentType = "text/plain"
 	}
 	req.Header.Set("Content-Type", contentType)
- } else {
-  	req.Header.Set("Content-Type", "text/plain")
- }
- // Debug output for Content-Type header
- fmt.Printf("Setting Content-Type header for webhook %s to: %s (Content-Type: %s)\n", webhookName, req.Header.Get("Content-Type"), webhook.ContentType)
+	} else {
+			req.Header.Set("Content-Type", "text/plain")
+	}
+	// Debug output for Content-Type header
+	logger.Debug("Setting Content-Type header for webhook %s to: %s (Content-Type: %s)", webhookName, req.Header.Get("Content-Type"), webhook.ContentType)
 
- for key, value := range webhook.Header {
-  req.Header.Set(key, value)
- }
+	for key, value := range webhook.Header {
+		req.Header.Set(key, value)
+	}
 
- resp, err := client.Do(req)
- if err != nil {
-  return fmt.Errorf("failed to send request: %v", err)
- }
- defer resp.Body.Close()
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send request: %v", err)
+	}
+	defer resp.Body.Close()
 
- if resp.StatusCode < 200 || resp.StatusCode >= 300 {
- // Read response body
- body, err := io.ReadAll(resp.Body)
- if err != nil {
-   return fmt.Errorf("failed to read response body: %v", err)
- }
- return fmt.Errorf("webhook request failed with status code %d: %s", resp.StatusCode, string(body))
- }
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+	// Read response body
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+			return fmt.Errorf("failed to read response body: %v", err)
+	}
+	return fmt.Errorf("webhook request failed with status code %d: %s", resp.StatusCode, string(body))
+	}
 
- return nil
+	return nil
 }
 
 func (s *NotificationSink) GetID() string {
@@ -217,4 +218,3 @@ func (s *NotificationSink) GetID() string {
 
 func (s *NotificationSink) GetExposedPort() (int, bool) {
 	return 0, false
-}

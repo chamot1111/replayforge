@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"flag"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httputil"
@@ -13,9 +12,11 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"fmt"
 
 	"github.com/chamot1111/replayforge/lualibs"
 	"github.com/chamot1111/replayforge/playerplugin"
+	"github.com/chamot1111/replayforge/pkgs/logger"
 
 	"github.com/Shopify/go-lua"
 	"github.com/chamot1111/replayforge/internal/envparser"
@@ -74,7 +75,7 @@ func timerHandler(sourceID string) {
 		}
 	}
 	if source == nil {
-		fmt.Printf("Source %s not found\n", sourceID)
+		logger.Error("Source %s not found", sourceID)
 		return
 	}
 
@@ -99,25 +100,30 @@ func timerHandler(sourceID string) {
 		sinkId, _ := l.ToString(1)
 		emittedContent, _ := l.ToString(2)
 
-		fmt.Printf("Timer emitted content for sink %s: %s\n", sinkId, emittedContent)
+		logger.Debug("Timer emitted content for sink %s: %s", sinkId, emittedContent)
 
 		if ch, ok := sinkChannels[sinkId]; ok {
 			ch <- emittedContent
 		} else {
-			fmt.Printf("Error: Sink channel with ID %s not found\n", sinkId)
+			logger.Error("Sink channel with ID %s not found", sinkId)
 		}
 		return 0
 	})
 
 	if err := source.LuaVM.ProtectedCall(1, 0, 0); err != nil {
-		fmt.Printf("Error executing timer_handler for source %s: %v\n", source.Name, err)
+		logger.Error("Error executing timer_handler for source %s: %v", source.Name, err)
 	}
 }
 
 func init() {
+	logLevel := os.Getenv("LOG_LEVEL")
+	if logLevel != "" {
+		logger.SetLogLevel(logLevel)
+	}
+
 	flag.StringVar(&configPath, "c", "config.json", "Path to the configuration file")
 	flag.Parse()
-	fmt.Printf("Config path: %s\n", configPath)
+	logger.Info("Config path: %s", configPath)
 	configData, err := os.ReadFile(configPath)
 	if err != nil {
 		panic(err)
@@ -125,7 +131,7 @@ func init() {
 
 	configDataStr, err := envparser.ProcessJSONWithEnvVars(string(configData))
 	if err != nil {
-		panic(fmt.Errorf("error processing environment variables in config: %w", err))
+		panic(err)
 	}
 	configData = []byte(configDataStr)
 
@@ -166,7 +172,7 @@ func init() {
 						sc.Sinks = append(sc.Sinks, sink.(string))
 					}
 				} else {
-					panic(fmt.Sprintf("Source %s must have either 'transformScript' or 'sinks' defined", sc.Name))
+					logger.Fatal("Source %s must have either 'transformScript' or 'sinks' defined", sc.Name)
 				}
 				if hookInterval, ok := sourceMap["hookInterval"].(string); ok {
 					sc.HookInterval = hookInterval
@@ -175,17 +181,17 @@ func init() {
 			}
 		}
 	} else {
-		panic(fmt.Sprintf("Failed to parse sources from config. Current type: %T", config["sources"]))
+		logger.Fatal("Failed to parse sources from config. Current type: %T", config["sources"])
 	}
 
 	var sinksConfig []SinkConfig
 	sinksJSON, err := json.Marshal(config["sinks"])
 	if err != nil {
-		panic(fmt.Sprintf("Failed to marshal sinks config: %v", err))
+		logger.Fatal("Failed to marshal sinks config: %v", err)
 	}
 	err = json.Unmarshal(sinksJSON, &sinksConfig)
 	if err != nil {
-		panic(fmt.Sprintf("Failed to unmarshal sinks config: %v", err))
+		logger.Fatal("Failed to unmarshal sinks config: %v", err)
 	}
 
 	sinks = make(map[string]playerplugin.Sink)
@@ -207,7 +213,7 @@ func init() {
 			pluginPath := fmt.Sprintf("./%s_sink.so", sc.Type)
 			loadedSink, err := LoadSinkPlugin(pluginPath)
 			if err != nil {
-				panic(fmt.Sprintf("Failed to load sink plugin for type %s: %v", sc.Type, err))
+				logger.Fatal("Failed to load sink plugin for type %s: %v", sc.Type, err)
 			}
 			sink = loadedSink
 		}
@@ -222,11 +228,11 @@ func init() {
 		}
 
 		if err := sink.Init(sinkConfig); err != nil {
-			panic(fmt.Sprintf("Failed to initialize sink: %v", err))
+			logger.Fatal("Failed to initialize sink: %v", err)
 		}
 
 		if err := sink.Start(); err != nil {
-			panic(fmt.Sprintf("Failed to start sink: %v", err))
+			logger.Fatal("Failed to start sink: %v", err)
 		}
 
 		sinks[sc.Name] = sink
@@ -234,7 +240,7 @@ func init() {
 	}
 
 	for sinkName, _ := range sinks {
-		fmt.Printf("Sink: %s\n", sinkName)
+		logger.Info("Sink: %s", sinkName)
 	}
 
 	for _, sc := range sourcesConfig {
@@ -246,7 +252,7 @@ func init() {
 		if sc.HookInterval != "" {
 			duration, err := time.ParseDuration(sc.HookInterval)
 			if err != nil {
-				panic(fmt.Sprintf("Invalid hook interval for source %s: %v", sc.Name, err))
+				logger.Fatal("Invalid hook interval for source %s: %v", sc.Name, err)
 			}
 			source.HookInterval = duration
 		}
@@ -289,21 +295,21 @@ func init() {
 		} else {
 			scriptBytes, err := os.ReadFile(sc.TransformScript)
 			if err != nil {
-				panic(fmt.Sprintf("Failed to read transform script file %s: %v", sc.TransformScript, err))
+				logger.Fatal("Failed to read transform script file %s: %v", sc.TransformScript, err)
 			}
 			scriptContent = string(scriptBytes)
 		}
 
 		if err := lua.DoString(source.LuaVM, scriptContent); err != nil {
 			luaError := fmt.Sprintf("Failed to load Lua script for source %s with error: %v\nScript contents:\n%s", source.Name, err, scriptContent)
-			panic(luaError)
+			logger.Fatal(luaError)
 		}
 
 		// Call init function if it exists
 		source.LuaVM.Global("init")
 		if source.LuaVM.IsFunction(-1) {
 			if err := source.LuaVM.ProtectedCall(0, 0, 0); err != nil {
-				panic(fmt.Sprintf("Failed to call init function for source %s: %v", source.Name, err))
+				logger.Fatal("Failed to call init function for source %s: %v", source.Name, err)
 			}
 		}
 		source.LuaVM.Pop(1)
@@ -313,7 +319,7 @@ func init() {
 			if sink, ok := sinks[sinkName]; ok {
 				source.Sinks = append(source.Sinks, sink)
 			} else {
-				panic(fmt.Sprintf("Sink %s not found for source %s", sinkName, source.Name))
+				logger.Fatal("Sink %s not found for source %s", sinkName, source.Name)
 			}
 		}
 
@@ -321,7 +327,7 @@ func init() {
 	}
 
 	if relayUrl == "" {
-		panic("relayUrl must be specified in the config file")
+		logger.Fatal("relayUrl must be specified in the config file")
 	}
 
 	if relayUrl != "" && !strings.HasSuffix(relayUrl, "/") {
@@ -336,7 +342,7 @@ func init() {
 	}
 
 	for _, source := range sources {
-		fmt.Printf("Source: %s, RelayAuthenticationBearer: %s\n", source.Name, source.RelayAuthenticationBearer)
+		logger.Info("Source: %s, RelayAuthenticationBearer: %s", source.Name, source.RelayAuthenticationBearer)
 	}
 }
 
@@ -358,7 +364,7 @@ func OnServerHeartbeat(source Source, client *http.Client) {
 	for {
 		req, err := http.NewRequest("GET", relayUrl+"first-batch?limit=10", nil)
 		if err != nil {
-			fmt.Printf("Error creating request: %v\n", err)
+			logger.Error("Error creating request: %v", err)
 			if backoffIndex < len(backoffDelays) {
 				curBackoffToSkip = backoffDelays[backoffIndex]
 				backoffIndex = min(backoffIndex+1, len(backoffDelays)-1)
@@ -371,7 +377,7 @@ func OnServerHeartbeat(source Source, client *http.Client) {
 
 		resp, err := client.Do(req)
 		if err != nil {
-			fmt.Printf("Error fetching from relay: %v\n", err)
+			logger.Error("Error fetching from relay: %v", err)
 			if backoffIndex < len(backoffDelays) {
 				curBackoffToSkip = backoffDelays[backoffIndex]
 				backoffIndex = min(backoffIndex+1, len(backoffDelays)-1)
@@ -385,7 +391,7 @@ func OnServerHeartbeat(source Source, client *http.Client) {
 			return
 		}
 		if resp.StatusCode != 200 {
-			fmt.Printf("Unexpected status code: %d\n", resp.StatusCode)
+			logger.Error("Unexpected status code: %d", resp.StatusCode)
 			if backoffIndex < len(backoffDelays) {
 				curBackoffToSkip = backoffDelays[backoffIndex]
 				backoffIndex = min(backoffIndex+1, len(backoffDelays)-1)
@@ -396,7 +402,7 @@ func OnServerHeartbeat(source Source, client *http.Client) {
 		var responseBatch []map[string]interface{}
 		err = json.NewDecoder(resp.Body).Decode(&responseBatch)
 		if err != nil {
-			fmt.Printf("Error decoding response body: %v\n", err)
+			logger.Error("Error decoding response body: %v", err)
 			if backoffIndex < len(backoffDelays) {
 				curBackoffToSkip = backoffDelays[backoffIndex]
 				backoffIndex = min(backoffIndex+1, len(backoffDelays)-1)
@@ -414,14 +420,14 @@ func OnServerHeartbeat(source Source, client *http.Client) {
 		for _, responseMap := range responseBatch {
 			id, ok := responseMap["id"].(float64)
 			if !ok {
-				fmt.Println("Error: 'id' not found in response or not a number")
+				logger.Error("'id' not found in response or not a number")
 				continue
 			}
 			idStr := fmt.Sprintf("%d", int(id))
 
 			content, ok := responseMap["content"].(string)
 			if !ok {
-				fmt.Println("Error: 'content' not found in response or not a string")
+				logger.Error("'content' not found in response or not a string")
 				continue
 			}
 
@@ -433,24 +439,24 @@ func OnServerHeartbeat(source Source, client *http.Client) {
 					sinkId, _ := l.ToString(1)
 					emittedContent, _ := l.ToString(2)
 
-					fmt.Printf("Processed content for sink %s: %s\n", sinkId, emittedContent)
+					logger.Debug("Processed content for sink %s: %s", sinkId, emittedContent)
 
 					if ch, ok := sinkChannels[sinkId]; ok {
 						ch <- emittedContent
 					} else {
-						fmt.Printf("Error: Sink channel with ID %s not found\n", sinkId)
+						logger.Error("Sink channel with ID %s not found", sinkId)
 					}
 
 					return 0
 				})
 
 				if err := source.LuaVM.ProtectedCall(2, 1, 0); err != nil {
-					fmt.Printf("Error calling process function for source %s: %v\n", source.Name, err)
+					logger.Error("Error calling process function for source %s: %v", source.Name, err)
 					continue
 				}
 
 			} else {
-				fmt.Printf("Error: 'process' function not found in Lua script for source %s\n", source.Name)
+				logger.Error("'process' function not found in Lua script for source %s", source.Name)
 				source.LuaVM.Pop(1)
 				continue
 			}
@@ -462,7 +468,7 @@ func OnServerHeartbeat(source Source, client *http.Client) {
 			// Acknowledge relay server
 			ackBody, err := json.Marshal(map[string][]string{"ids": idsToAck})
 			if err != nil {
-				fmt.Printf("Error marshaling acknowledgment body: %v\n", err)
+				logger.Error("Error marshaling acknowledgment body: %v", err)
 				if backoffIndex < len(backoffDelays) {
 					curBackoffToSkip = backoffDelays[backoffIndex]
 					backoffIndex = min(backoffIndex+1, len(backoffDelays)-1)
@@ -473,7 +479,7 @@ func OnServerHeartbeat(source Source, client *http.Client) {
 			ackReq, err := http.NewRequest("DELETE", relayUrl+"acknowledge-batch", bytes.NewBuffer(ackBody))
 
 			if err != nil {
-				fmt.Printf("Error creating acknowledgment request: %v\n", err)
+				logger.Error("Error creating acknowledgment request: %v", err)
 				if backoffIndex < len(backoffDelays) {
 					curBackoffToSkip = backoffDelays[backoffIndex]
 					backoffIndex = min(backoffIndex+1, len(backoffDelays)-1)
@@ -486,7 +492,7 @@ func OnServerHeartbeat(source Source, client *http.Client) {
 
 			ackResp, err := client.Do(ackReq)
 			if err != nil {
-				fmt.Printf("Error sending acknowledgment: %v\n", err)
+				logger.Error("Error sending acknowledgment: %v", err)
 				if backoffIndex < len(backoffDelays) {
 					curBackoffToSkip = backoffDelays[backoffIndex]
 					backoffIndex = min(backoffIndex+1, len(backoffDelays)-1)
@@ -496,17 +502,17 @@ func OnServerHeartbeat(source Source, client *http.Client) {
 			defer ackResp.Body.Close()
 
 			if ackResp.StatusCode != 200 {
-				fmt.Printf("Unexpected status code from acknowledgment: %d\n", ackResp.StatusCode)
+				logger.Error("Unexpected status code from acknowledgment: %d", ackResp.StatusCode)
 				ackRespBody, err := io.ReadAll(ackResp.Body)
 				if err != nil {
-					fmt.Printf("Error reading acknowledgment response body: %v\n", err)
+					logger.Error("Error reading acknowledgment response body: %v", err)
 					if backoffIndex < len(backoffDelays) {
 						curBackoffToSkip = backoffDelays[backoffIndex]
 						backoffIndex = min(backoffIndex+1, len(backoffDelays)-1)
 					}
 					return
 				}
-				fmt.Printf("Acknowledgment response: %s\n", string(ackRespBody))
+				logger.Error("Acknowledgment response: %s", string(ackRespBody))
 			}
 		}
 
@@ -563,9 +569,9 @@ func main() {
 
 		go func() {
 			if listenUsingTailscale && useTsnet {
-				fmt.Printf("Starting reverse proxy using Tailscale on %s:%d\n", globalListenAddress, globalExposedPort)
+				logger.Info("Starting reverse proxy using Tailscale on %s:%d", globalListenAddress, globalExposedPort)
 			} else {
-				fmt.Printf("Starting reverse proxy on %s:%d\n", globalListenAddress, globalExposedPort)
+				logger.Info("Starting reverse proxy on %s:%d", globalListenAddress, globalExposedPort)
 			}
 			srv := &http.Server{
 				Addr:    fmt.Sprintf("%s:%d", globalListenAddress, globalExposedPort),
@@ -574,15 +580,15 @@ func main() {
 			if listenUsingTailscale && useTsnet {
 				ln, err := s.Listen("tcp", srv.Addr)
 				if err != nil {
-					fmt.Printf("Error creating tailscale listener: %v\n", err)
+					logger.Error("Error creating tailscale listener: %v", err)
 					return
 				}
 				if err := srv.Serve(ln); err != nil {
-					fmt.Printf("Error serving through tailscale: %v\n", err)
+					logger.Error("Error serving through tailscale: %v", err)
 				}
 			} else {
 				if err := srv.ListenAndServe(); err != nil {
-					fmt.Printf("Error starting reverse proxy: %v\n", err)
+					logger.Error("Error starting reverse proxy: %v", err)
 				}
 			}
 		}()
@@ -598,7 +604,7 @@ func main() {
 				var decodedData map[string]interface{}
 				err := json.Unmarshal([]byte(msg), &decodedData)
 				if err != nil {
-					fmt.Printf("Error decoding processed JSON data: %v\n", err)
+					logger.Error("Error decoding processed JSON data: %v", err)
 					continue
 				}
 
@@ -610,7 +616,7 @@ func main() {
 
 				err = sink.Execute(method, path, []byte(requestBody), headers, params, sinkChannels)
 				if err != nil {
-					fmt.Printf("Error executing sink operation: %v\n", err)
+					logger.Error("Error executing sink operation: %v", err)
 				}
 			}
 		}(sinkName, sink)

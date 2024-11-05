@@ -4,11 +4,11 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"strings"
 	"strconv"
 	"github.com/chamot1111/replayforge/playerplugin"
+	"github.com/chamot1111/replayforge/pkgs/logger"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -74,7 +74,7 @@ func (s *SqliteSink) Start() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc(fmt.Sprintf("/%s/rpf-db/", s.ID), s.handleGetRequest)
 	mux.Handle(fmt.Sprintf("/%s/static/", s.ID), http.StripPrefix(fmt.Sprintf("/%s/static/", s.ID), http.FileServer(http.Dir(s.StaticDir))))
-	log.Printf("Starting HTTP server on %s", s.ListenAddr)
+	logger.Info("Starting HTTP server on %s", s.ListenAddr)
 	go func() {
 		srv := &http.Server{
 			Addr:    s.ListenAddr,
@@ -82,7 +82,7 @@ func (s *SqliteSink) Start() error {
 		}
 		err := srv.ListenAndServe()
 		if err != nil {
-			log.Fatalf("Failed to start HTTP server: %v", err)
+			logger.Fatal("Failed to start HTTP server: %v", err)
 		}
 	}()
 	return nil
@@ -271,6 +271,7 @@ func (s *SqliteSink) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 	// Prepare and execute the query
 	stmt, err := s.DB.Prepare(query)
 	if err != nil {
+		logger.Error("Error preparing query: %v", err)
 		http.Error(w, fmt.Sprintf("Error preparing query: %v", err), http.StatusInternalServerError)
 		return
 	}
@@ -286,6 +287,7 @@ func (s *SqliteSink) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := stmt.Query(queryArgs...)
 	if err != nil {
+		logger.Error("Error querying table: %v", err)
 		http.Error(w, fmt.Sprintf("Error querying table: %v", err), http.StatusInternalServerError)
 		return
 	}
@@ -293,6 +295,7 @@ func (s *SqliteSink) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 
 	columns, err := rows.Columns()
 	if err != nil {
+		logger.Error("Error get columns: %v", err)
 		http.Error(w, fmt.Sprintf("Error get columns: %v", err), http.StatusInternalServerError)
 		return
 	}
@@ -306,6 +309,7 @@ func (s *SqliteSink) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if err := rows.Scan(valuePtrs...); err != nil {
+			logger.Error("Error scanning row: %v", err)
 			http.Error(w, fmt.Sprintf("Error scanning row: %v", err), http.StatusInternalServerError)
 			return
 		}
@@ -332,19 +336,19 @@ func (s *SqliteSink) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 func (s *SqliteSink) loadTableSchemas() {
 	rows, err := s.DB.Query("SELECT name FROM sqlite_master WHERE type='table'")
 	if err != nil {
-		panic(fmt.Sprintf("Failed to query tables: %v", err))
+		logger.Fatal("Failed to query tables: %v", err)
 	}
 	defer rows.Close()
 
 	for rows.Next() {
 		var tableName string
 		if err := rows.Scan(&tableName); err != nil {
-			panic(fmt.Sprintf("Failed to scan table name: %v", err))
+			logger.Fatal("Failed to scan table name: %v", err)
 		}
 
 		tableInfo, err := s.DB.Query(fmt.Sprintf("PRAGMA table_info(%s)", tableName))
 		if err != nil {
-			panic(fmt.Sprintf("Failed to get table info for %s: %v", tableName, err))
+			logger.Fatal("Failed to get table info for %s: %v", tableName, err)
 		}
 		defer tableInfo.Close()
 
@@ -355,7 +359,7 @@ func (s *SqliteSink) loadTableSchemas() {
 			var notNull, pk int
 			var dfltValue interface{}
 			if err := tableInfo.Scan(&cid, &name, &dataType, &notNull, &dfltValue, &pk); err != nil {
-				panic(fmt.Sprintf("Failed to scan column info: %v", err))
+				logger.Fatal("Failed to scan column info: %v", err)
 			}
 			s.TableSchemas[tableName][name] = dataType
 		}
@@ -363,9 +367,9 @@ func (s *SqliteSink) loadTableSchemas() {
 }
 
 func (s *SqliteSink) GetID() string {
- return s.ID
+	return s.ID
 }
 
 func (s *SqliteSink) GetExposedPort() (int, bool) {
- return s.ExposedPort, true
+	return s.ExposedPort, true
 }

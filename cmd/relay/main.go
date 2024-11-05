@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -17,6 +16,7 @@ import (
 	"github.com/chamot1111/replayforge/internal/envparser"
 	_ "github.com/mattn/go-sqlite3"
 	"tailscale.com/tsnet"
+	"github.com/chamot1111/replayforge/pkgs/logger"
 )
 
 var (
@@ -40,6 +40,11 @@ type Config struct {
 }
 
 func init() {
+	logLevel := os.Getenv("LOG_LEVEL")
+	if logLevel != "" {
+		logger.SetLogLevel(logLevel)
+	}
+
 	flag.StringVar(&configPath, "c", "", "Path to config file")
 	flag.IntVar(&port, "p", 8081, "Port to listen on")
 	flag.Parse()
@@ -47,23 +52,23 @@ func init() {
 
 func main() {
 	if configPath == "" {
-		log.Fatal("Config file path is required")
+		logger.Fatal("Config file path is required")
 	}
 
-	log.Printf("Config path: %s", configPath)
+	logger.Info("Config path: %s", configPath)
 	data, err := os.ReadFile(configPath)
 	if err != nil {
-		log.Fatalf("Failed to read config file: %v", err)
+		logger.Fatal("Failed to read config file: %v", err)
 	}
 
 	configDataStr, err := envparser.ProcessJSONWithEnvVars(string(data))
 	if err != nil {
-		panic(fmt.Errorf("error processing environment variables in config: %w", err))
+		logger.Fatal("Error processing environment variables in config: %v", err)
 	}
 	data = []byte(configDataStr)
 
 	if err := json.Unmarshal(data, &config); err != nil {
-		log.Fatalf("Failed to parse config file: %v", err)
+		logger.Fatal("Failed to parse config file: %v", err)
 	}
 
 	if config.Port > 0 {
@@ -71,20 +76,20 @@ func main() {
 	}
 
 	if len(config.Buckets) == 0 {
-		log.Fatal("At least one bucket configuration is required")
+		logger.Fatal("At least one bucket configuration is required")
 	}
 
-	log.Printf("Configuration:")
-	log.Printf("  Config Path: %s", configPath)
-	log.Printf("  Port: %d", port)
-	log.Printf("  Use Tailnet: %v", config.UseTailnet)
-	log.Printf("  Buckets:")
+	logger.Info("Configuration:")
+	logger.Info("  Config Path: %s", configPath)
+	logger.Info("  Port: %d", port)
+	logger.Info("  Use Tailnet: %v", config.UseTailnet)
+	logger.Info("  Buckets:")
 	for bucket, bucketConfig := range config.Buckets {
-		log.Printf("    - %s:", bucket)
-		log.Printf("      DB Max Size: %d KB", bucketConfig.DbMaxSizeKb)
-		log.Printf("      Time to Live: %d seconds", bucketConfig.Tls)
+		logger.Info("    - %s:", bucket)
+		logger.Info("      DB Max Size: %d KB", bucketConfig.DbMaxSizeKb)
+		logger.Info("      Time to Live: %d seconds", bucketConfig.Tls)
 	}
-	// Create a new serve mux
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/record-batch", handleRecordBatch)
 	mux.HandleFunc("/first-batch", handleFirstBatch)
@@ -102,15 +107,15 @@ func main() {
 
 		ln, err := s.Listen("tcp", fmt.Sprintf(":%d", port))
 		if err != nil {
-			log.Fatalf("Failed to listen on Tailscale network: %v", err)
+			logger.Fatal("Failed to listen on Tailscale network: %v", err)
 		}
 		defer ln.Close()
 
-		log.Printf("Listening on Tailscale network on port %d", port)
-		log.Fatal(http.Serve(ln, mux))
+		logger.Info("Listening on Tailscale network on port %d", port)
+		logger.Fatal("Server error: %v", http.Serve(ln, mux))
 	} else {
-		log.Printf("Listening on port %d", port)
-		log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", port), mux))
+		logger.Info("Listening on port %d", port)
+		logger.Fatal("Server error: %v", http.ListenAndServe(fmt.Sprintf(":%d", port), mux))
 	}
 }
 
@@ -127,21 +132,21 @@ func verifyAuth(authHeader, bucket string) bool {
 
 func handleRecordBatch(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		log.Printf("Method not allowed: %s", r.Method)
+		logger.Warn("Method not allowed: %s", r.Method)
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		log.Printf("Failed to read body: %v", err)
+		logger.Error("Failed to read body: %v", err)
 		http.Error(w, "Failed to read body", http.StatusInternalServerError)
 		return
 	}
 
 	var events []string
 	if err := json.Unmarshal(body, &events); err != nil {
-		log.Printf("Failed to parse events: %v", err)
+		logger.Error("Failed to parse events: %v", err)
 		http.Error(w, "Invalid JSON format", http.StatusBadRequest)
 		return
 	}
@@ -151,7 +156,7 @@ func handleRecordBatch(w http.ResponseWriter, r *http.Request) {
 	for _, bucket := range buckets {
 		bucket = strings.TrimSpace(bucket)
 		if !verifyAuth(r.Header.Get("Authorization"), bucket) {
-			log.Printf("Authentication failed for bucket: %s", bucket)
+			logger.Warn("Authentication failed for bucket: %s", bucket)
 			http.Error(w, "Authentication failed", http.StatusUnauthorized)
 			return
 		}
@@ -162,21 +167,21 @@ func handleRecordBatch(w http.ResponseWriter, r *http.Request) {
 
 		stat, err := os.Stat(dbPath)
 		if err == nil && stat.Size() > int64(bucketConfig.DbMaxSizeKb*1024/2) {
-			log.Printf("Database size limit exceeded for bucket: %s", bucket)
+			logger.Warn("Database size limit exceeded for bucket: %s", bucket)
 			exceededBuckets = append(exceededBuckets, bucket)
 			continue
 		}
 
 		err = os.MkdirAll(dbFolderBucket, 0755)
 		if err != nil {
-			log.Printf("Failed to create database folder for bucket %s: %v", bucket, err)
+			logger.Error("Failed to create database folder for bucket %s: %v", bucket, err)
 			http.Error(w, "Failed to create database folder", http.StatusInternalServerError)
 			return
 		}
 
 		db, err := sql.Open("sqlite3", dbPath+"?_auto_vacuum=1&_journal_mode=WAL&_synchronous=NORMAL")
 		if err != nil {
-			log.Printf("Failed to open database for bucket %s: %v", bucket, err)
+			logger.Error("Failed to open database for bucket %s: %v", bucket, err)
 			http.Error(w, "Failed to open database", http.StatusInternalServerError)
 			return
 		}
@@ -191,14 +196,14 @@ func handleRecordBatch(w http.ResponseWriter, r *http.Request) {
 			CREATE INDEX IF NOT EXISTS idx_timestamp ON wrap_calls (timestamp);
 								`)
 		if err != nil {
-			log.Printf("Failed to create table or index for bucket %s: %v", bucket, err)
+			logger.Error("Failed to create table or index for bucket %s: %v", bucket, err)
 			http.Error(w, "Failed to create table or index", http.StatusInternalServerError)
 			return
 		}
 
 		tx, err := db.Begin()
 		if err != nil {
-			log.Printf("Failed to begin transaction for bucket %s: %v", bucket, err)
+			logger.Error("Failed to begin transaction for bucket %s: %v", bucket, err)
 			http.Error(w, "Failed to begin transaction", http.StatusInternalServerError)
 			return
 		}
@@ -206,7 +211,7 @@ func handleRecordBatch(w http.ResponseWriter, r *http.Request) {
 		stmt, err := tx.Prepare("INSERT INTO wrap_calls (content, timestamp) VALUES (?, ?)")
 		if err != nil {
 			tx.Rollback()
-			log.Printf("Failed to prepare statement for bucket %s: %v", bucket, err)
+			logger.Error("Failed to prepare statement for bucket %s: %v", bucket, err)
 			http.Error(w, "Failed to prepare statement", http.StatusInternalServerError)
 			return
 		}
@@ -217,29 +222,28 @@ func handleRecordBatch(w http.ResponseWriter, r *http.Request) {
 			_, err = stmt.Exec(event, timestamp)
 			if err != nil {
 				tx.Rollback()
-				log.Printf("Failed to insert event for bucket %s: %v", bucket, err)
+				logger.Error("Failed to insert event for bucket %s: %v", bucket, err)
 				http.Error(w, "Failed to insert event", http.StatusInternalServerError)
 				return
 			}
 		}
 
 		if err = tx.Commit(); err != nil {
-			log.Printf("Failed to commit transaction for bucket %s: %v", bucket, err)
+			logger.Error("Failed to commit transaction for bucket %s: %v", bucket, err)
 			http.Error(w, "Failed to commit transaction", http.StatusInternalServerError)
 			return
 		}
 
-		// Delete expired records if Tls > 0
 		if bucketConfig.Tls > 0 {
 			_, err = db.Exec("DELETE FROM wrap_calls WHERE timestamp < ?", time.Now().Unix()-int64(bucketConfig.Tls))
 			if err != nil {
-				log.Printf("Failed to delete expired records for bucket %s: %v", bucket, err)
+				logger.Error("Failed to delete expired records for bucket %s: %v", bucket, err)
 			}
 		}
 	}
 
 	if len(exceededBuckets) > 0 {
-		log.Printf("Database size limit exceeded for buckets: %v", exceededBuckets)
+		logger.Warn("Database size limit exceeded for buckets: %v", exceededBuckets)
 		http.Error(w, fmt.Sprintf("Database size limit exceeded for buckets: %v", exceededBuckets), http.StatusTooManyRequests)
 		return
 	}
@@ -249,20 +253,20 @@ func handleRecordBatch(w http.ResponseWriter, r *http.Request) {
 
 func handleFirstBatch(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		log.Printf("Method not allowed: %s", r.Method)
+		logger.Warn("Method not allowed: %s", r.Method)
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
 	bucket := r.Header.Get("RF-BUCKET")
 	if bucket == "" {
-		log.Printf("Missing RF-BUCKET header")
+		logger.Warn("Missing RF-BUCKET header")
 		http.Error(w, "Missing RF-BUCKET header", http.StatusBadRequest)
 		return
 	}
 
 	if !verifyAuth(r.Header.Get("Authorization"), bucket) {
-		log.Printf("Authentication failed for bucket: %s", bucket)
+		logger.Warn("Authentication failed for bucket: %s", bucket)
 		http.Error(w, "Authentication failed", http.StatusUnauthorized)
 		return
 	}
@@ -272,7 +276,7 @@ func handleFirstBatch(w http.ResponseWriter, r *http.Request) {
 	if limitStr != "" {
 		parsedLimit, err := strconv.Atoi(limitStr)
 		if err != nil || parsedLimit <= 0 {
-			log.Printf("Invalid limit parameter: %s", limitStr)
+			logger.Warn("Invalid limit parameter: %s", limitStr)
 			http.Error(w, "Invalid limit parameter", http.StatusBadRequest)
 			return
 		}
@@ -284,14 +288,14 @@ func handleFirstBatch(w http.ResponseWriter, r *http.Request) {
 	dbPath := filepath.Join(dbFolder, bucket, "relay.sqlite3")
 
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
-		log.Printf("No content found for bucket: %s", bucket)
+		logger.Info("No content found for bucket: %s", bucket)
 		http.Error(w, "No content found", http.StatusNotFound)
 		return
 	}
 
 	db, err := sql.Open("sqlite3", dbPath+"?_auto_vacuum=1&_journal_mode=WAL&_synchronous=NORMAL")
 	if err != nil {
-		log.Printf("Failed to open database: %v", err)
+		logger.Error("Failed to open database: %v", err)
 		http.Error(w, "Failed to open database", http.StatusInternalServerError)
 		return
 	}
@@ -304,7 +308,7 @@ func handleFirstBatch(w http.ResponseWriter, r *http.Request) {
 								LIMIT ?
 				`, limit)
 	if err != nil {
-		log.Printf("Failed to query database: %v", err)
+		logger.Error("Failed to query database: %v", err)
 		http.Error(w, "Failed to query database", http.StatusInternalServerError)
 		return
 	}
@@ -315,7 +319,7 @@ func handleFirstBatch(w http.ResponseWriter, r *http.Request) {
 		var id int
 		var content string
 		if err := rows.Scan(&id, &content); err != nil {
-			log.Printf("Failed to scan row: %v", err)
+			logger.Error("Failed to scan row: %v", err)
 			http.Error(w, "Failed to scan row", http.StatusInternalServerError)
 			return
 		}
@@ -338,27 +342,27 @@ func handleFirstBatch(w http.ResponseWriter, r *http.Request) {
 
 func handleAcknowledgeBatch(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodDelete {
-		log.Printf("Method not allowed: %s", r.Method)
+		logger.Warn("Method not allowed: %s", r.Method)
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
 	bucket := r.Header.Get("RF-BUCKET")
 	if bucket == "" {
-		log.Printf("Missing RF-BUCKET header")
+		logger.Warn("Missing RF-BUCKET header")
 		http.Error(w, "Missing RF-BUCKET header", http.StatusBadRequest)
 		return
 	}
 
 	if !verifyAuth(r.Header.Get("Authorization"), bucket) {
-		log.Printf("Authentication failed for bucket: %s", bucket)
+		logger.Warn("Authentication failed for bucket: %s", bucket)
 		http.Error(w, "Authentication failed", http.StatusUnauthorized)
 		return
 	}
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		log.Printf("Failed to read body: %v", err)
+		logger.Error("Failed to read body: %v", err)
 		http.Error(w, "Failed to read body", http.StatusInternalServerError)
 		return
 	}
@@ -367,13 +371,13 @@ func handleAcknowledgeBatch(w http.ResponseWriter, r *http.Request) {
 		Ids []string `json:"ids"`
 	}
 	if err := json.Unmarshal(body, &requestBody); err != nil {
-		log.Printf("Failed to parse ids: %v", err)
+		logger.Error("Failed to parse ids: %v", err)
 		http.Error(w, "Invalid JSON format", http.StatusBadRequest)
 		return
 	}
 
 	if len(requestBody.Ids) == 0 {
-		log.Printf("Empty ids array")
+		logger.Warn("Empty ids array")
 		http.Error(w, "Empty ids array", http.StatusBadRequest)
 		return
 	}
@@ -381,14 +385,14 @@ func handleAcknowledgeBatch(w http.ResponseWriter, r *http.Request) {
 	dbPath := filepath.Join(dbFolder, bucket, "relay.sqlite3")
 
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
-		log.Printf("No content found for bucket: %s", bucket)
+		logger.Info("No content found for bucket: %s", bucket)
 		http.Error(w, "No content found", http.StatusNotFound)
 		return
 	}
 
 	db, err := sql.Open("sqlite3", dbPath+"?_auto_vacuum=1&_journal_mode=WAL&_synchronous=NORMAL")
 	if err != nil {
-		log.Printf("Failed to open database: %v", err)
+		logger.Error("Failed to open database: %v", err)
 		http.Error(w, "Failed to open database", http.StatusInternalServerError)
 		return
 	}
@@ -405,14 +409,14 @@ func handleAcknowledgeBatch(w http.ResponseWriter, r *http.Request) {
 
 	result, err := db.Exec(query, args...)
 	if err != nil {
-		log.Printf("Failed to delete records: %v", err)
+		logger.Error("Failed to delete records: %v", err)
 		http.Error(w, "Failed to delete records", http.StatusInternalServerError)
 		return
 	}
 
 	rowsAffected, _ := result.RowsAffected()
 	if rowsAffected == 0 {
-		log.Printf("No records found with provided ids")
+		logger.Info("No records found with provided ids")
 		http.Error(w, "No records found with provided ids", http.StatusNotFound)
 		return
 	}

@@ -4,9 +4,9 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"time"
+	"github.com/chamot1111/replayforge/pkgs/logger"
 )
 
 type RepeatFileSource struct {
@@ -45,7 +45,7 @@ func (r *RepeatFileSource) readLogFile() {
 	for {
 		file, err := os.Open(r.FilePath)
 		if err != nil {
-			log.Printf("Failed to open file %s: %v", r.FilePath, err)
+			logger.Error("Failed to open file %s: %v", r.FilePath, err)
 			time.Sleep(r.Interval)
 			continue
 		}
@@ -62,7 +62,7 @@ func (r *RepeatFileSource) readLogFile() {
 		}
 
 		if err := scanner.Err(); err != nil {
-			log.Printf("Error reading file %s: %v", r.FilePath, err)
+			logger.Error("Error reading file %s: %v", r.FilePath, err)
 		}
 
 		file.Close()

@@ -4,9 +4,9 @@ import (
     "encoding/json"
     "fmt"
     "io"
-    "log"
     "net/http"
     "time"
+    "github.com/chamot1111/replayforge/pkgs/logger"
 )
 
 type HTTPSource struct {
@@ -35,9 +35,9 @@ func (h *HTTPSource) Init(config SourceConfig, eventChan chan<- EventSource) err
 func (h *HTTPSource) Start() error {
     db, err, _ := setupSql(h.DatabasePath, true)
     if (err != nil) {
-   		if db != nil {
+     if db != nil {
            db.Close()
-       	}
+        }
         return fmt.Errorf("error setting up SQL for source %s: %v", h.ID, err)
     }
     defer db.Close()
@@ -50,9 +50,9 @@ func (h *HTTPSource) Start() error {
     }
 
     go func() {
-        log.Printf("HTTP source listening on port %d", h.ListenPort)
+        logger.Info("HTTP source listening on port %d", h.ListenPort)
         if err := server.ListenAndServe(); err != nil {
-            log.Printf("HTTP server error: %v", err)
+            logger.Error("HTTP server error: %v", err)
         }
     }()
 
@@ -67,10 +67,10 @@ func (h *HTTPSource) Stop() error {
 func (h *HTTPSource) handleRequest(w http.ResponseWriter, r *http.Request) {
     db, err, _ := setupSql(h.DatabasePath, false)
     if err != nil {
-    	if db != nil {
+     if db != nil {
             db.Close()
         }
-        log.Printf("Error setting up SQL: %v", err)
+        logger.Error("Error setting up SQL: %v", err)
         http.Error(w, fmt.Sprintf("Error: %v", err), http.StatusInternalServerError)
         return
     }
@@ -83,7 +83,7 @@ func (h *HTTPSource) handleRequest(w http.ResponseWriter, r *http.Request) {
     headers.Del("Connection")
     headers.Del("Cookie")
 
-    fmt.Printf("%s [%s] %s\n", time.Now().Format("2006-01-02 15:04:05"), r.Method, path)
+    logger.Debug("%s [%s] %s", time.Now().Format("2006-01-02 15:04:05"), r.Method, path)
 
     body, err := io.ReadAll(r.Body)
     if err != nil {
@@ -102,7 +102,7 @@ func (h *HTTPSource) handleRequest(w http.ResponseWriter, r *http.Request) {
 
     jsonContent, err := json.Marshal(wrapCallObject)
     if err != nil {
-        log.Printf("Error marshaling JSON: %v", err)
+        logger.Error("Error marshaling JSON: %v", err)
         http.Error(w, fmt.Sprintf("Error: %v", err), http.StatusInternalServerError)
         return
     }
@@ -117,7 +117,7 @@ func (h *HTTPSource) handleRequest(w http.ResponseWriter, r *http.Request) {
         w.WriteHeader(http.StatusOK)
         w.Write([]byte("Request received"))
     default:
-        log.Printf("Event channel full, dropping event")
+        logger.Warn("Event channel full, dropping event")
         w.WriteHeader(http.StatusServiceUnavailable)
         w.Write([]byte("Server busy, try again later"))
     }

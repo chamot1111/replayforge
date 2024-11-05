@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"github.com/chamot1111/replayforge/playerplugin"
+	"github.com/chamot1111/replayforge/pkgs/logger"
 )
 
 type HttpSink struct {
@@ -21,6 +22,7 @@ func (s *HttpSink) Init(config playerplugin.SinkConfig) error {
 	}
 	err := json.Unmarshal(config.Params, &params)
 	if err != nil {
+		logger.Error("failed to parse sink params: %v", err)
 		return fmt.Errorf("failed to parse sink params: %v", err)
 	}
 	s.TargetHost = params.TargetHost
@@ -39,6 +41,7 @@ func (s *HttpSink) Execute(method, path string, body []byte, headers map[string]
 
 	req, err := http.NewRequest(method, targetUrl, strings.NewReader(string(body)))
 	if err != nil {
+		logger.Error("error creating request for target host: %v", err)
 		return fmt.Errorf("error creating request for target host: %v", err)
 	}
 
@@ -48,12 +51,14 @@ func (s *HttpSink) Execute(method, path string, body []byte, headers map[string]
 
 	resp, err := client.Do(req)
 	if err != nil {
+		logger.Error("error fetching from target host: %v", err)
 		return fmt.Errorf("error fetching from target host: %v", err)
 	}
 	defer resp.Body.Close()
 
 	_, err = io.ReadAll(resp.Body)
 	if err != nil {
+		logger.Error("error reading response body from target host: %v", err)
 		return fmt.Errorf("error reading response body from target host: %v", err)
 	}
 
@@ -66,9 +71,9 @@ func (s *HttpSink) Close() error {
 }
 
 func (s *HttpSink) GetID() string {
- return s.ID
+	return s.ID
 }
 
 func (s *HttpSink) GetExposedPort() (int, bool) {
-    return 0, false
+				return 0, false
 }

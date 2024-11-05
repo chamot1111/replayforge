@@ -7,7 +7,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -19,6 +18,7 @@ import (
 	"tailscale.com/tsnet"
 
 	"github.com/chamot1111/replayforge/lualibs"
+	"github.com/chamot1111/replayforge/pkgs/logger"
 )
 
 const (
@@ -92,6 +92,11 @@ var (
 )
 
 func init() {
+	logLevel := os.Getenv("LOG_LEVEL")
+	if logLevel != "" {
+		logger.SetLogLevel(logLevel)
+	}
+
 	var dbgScriptPath, dbgFilePath string
 	flag.StringVar(&configPath, "c", "", "Path to config file")
 	flag.StringVar(&dbgScriptPath, "dbg", "", "Debug mode: path to script file")
@@ -99,31 +104,31 @@ func init() {
 	flag.Parse()
 
 	if configPath == "" && dbgScriptPath == "" {
-		log.Fatal("Either config file path (-c) or debug script path (--dbg) must be provided")
+		logger.Fatal("Either config file path (-c) or debug script path (--dbg) must be provided")
 	}
 	var configData []byte
 	if dbgScriptPath != "" {
 		if dbgFilePath == "" {
-			log.Fatal("In debug mode, both script path (--dbg) and file path (--dbg-file) must be provided")
+			logger.Fatal("In debug mode, both script path (--dbg) and file path (--dbg-file) must be provided")
 		}
 		configData = []byte(strings.Replace(strings.Replace(debugConfig, "${script_path}", dbgScriptPath, -1), "${file_path}", dbgFilePath, -1))
 	} else {
-		log.Printf("Config path: %s", configPath)
+		logger.Info("Config path: %s", configPath)
 		var err error
 		configData, err = os.ReadFile(configPath)
 		if err != nil {
-			log.Fatalf("Failed to read config file: %v", err)
+			logger.Fatal("Failed to read config file: %v", err)
 		}
 	}
 
 	configDataStr, err := envparser.ProcessJSONWithEnvVars(string(configData))
 	if err != nil {
-		log.Fatalf("Failed to process config file with environment variables: %v", err)
+		logger.Fatal("Failed to process config file with environment variables: %v", err)
 	}
 	configData = []byte(configDataStr)
 
 	if err := json.Unmarshal(configData, &config); err != nil {
-		log.Fatalf("Failed to parse config JSON: %v", err)
+		logger.Fatal("Failed to parse config JSON: %v", err)
 	}
 
 	vms = make(map[string]*lua.State)
@@ -144,9 +149,9 @@ func init() {
 		db, err, isSpaceError := initSetupSql(sink.DatabasePath, false)
 		if err != nil {
 			if !isSpaceError {
-				log.Fatalf("Error setting up SQL for sink %s: %v", sink.ID, err)
+				logger.Fatal("Error setting up SQL for sink %s: %v", sink.ID, err)
 			} else {
-				log.Printf("Warning: Space error setting up SQL for sink %s: %v", sink.ID, err)
+				logger.Warn("Space error setting up SQL for sink %s: %v", sink.ID, err)
 			}
 		}
 		db.Close()
@@ -159,7 +164,7 @@ func init() {
 	for _, rawSource := range config.Sources {
 		var sourceConfig SourceConfig
 		if err := json.Unmarshal(rawSource, &sourceConfig); err != nil {
-			log.Fatalf("Failed to parse source JSON: %v", err)
+			logger.Fatal("Failed to parse source JSON: %v", err)
 		}
 
 		var source Source
@@ -171,12 +176,12 @@ func init() {
 		case "repeatfile":
 			source = &RepeatFileSource{}
 		default:
-			log.Fatalf("Unsupported source type: %s", sourceConfig.Type)
+			logger.Fatal("Unsupported source type: %s", sourceConfig.Type)
 		}
 
 		eventChan := make(chan EventSource)
 		if err := source.Init(sourceConfig, eventChan); err != nil {
-			log.Fatalf("Failed to initialize source %s: %v", sourceConfig.ID, err)
+			logger.Fatal("Failed to initialize source %s: %v", sourceConfig.ID, err)
 		}
 
 		sources[sourceConfig.ID] = source
@@ -195,10 +200,10 @@ func init() {
 		if sourceConfig.TransformScript != "" {
 			script, err := os.ReadFile(sourceConfig.TransformScript)
 			if err != nil {
-				log.Fatalf("Failed to read script file for source %s: %v", sourceConfig.ID, err)
+				logger.Fatal("Failed to read script file for source %s: %v", sourceConfig.ID, err)
 			}
 			if err := lua.DoString(vm, string(script)); err != nil {
-				log.Fatalf("Failed to load script for source %s: %v", sourceConfig.ID, err)
+				logger.Fatal("Failed to load script for source %s: %v", sourceConfig.ID, err)
 			}
 		} else if sourceConfig.TargetSink != "" {
 			defaultScript := fmt.Sprintf(`
@@ -207,16 +212,16 @@ func init() {
 				end
 			`, sourceConfig.TargetSink)
 			if err := lua.DoString(vm, defaultScript); err != nil {
-				log.Fatalf("Failed to load default script for source %s: %v", sourceConfig.ID, err)
+				logger.Fatal("Failed to load default script for source %s: %v", sourceConfig.ID, err)
 			}
 		} else {
-			log.Fatalf("Either TransformScript or TargetSink must be provided for source %s", sourceConfig.ID)
+			logger.Fatal("Either TransformScript or TargetSink must be provided for source %s", sourceConfig.ID)
 		}
 
 		vm.Global("init")
 		if vm.IsFunction(-1) {
 			if err := vm.ProtectedCall(0, 0, 0); err != nil {
-				log.Fatalf("Failed to run init hook for source %s: %v", sourceConfig.ID, err)
+				logger.Fatal("Failed to run init hook for source %s: %v", sourceConfig.ID, err)
 			}
 		}
 		vm.Pop(1)
@@ -279,13 +284,13 @@ func initSetupSql(dbPath string, isSource bool) (*sql.DB, error, bool) {
 func processEvent(event EventSource) {
 	vm, ok := vms[event.SourceID]
 	if !ok {
-		log.Printf("VM not found for source %s", event.SourceID)
+		logger.Warn("VM not found for source %s", event.SourceID)
 		return
 	}
 
 	vm.Global("Process")
 	if !vm.IsFunction(-1) {
-		log.Printf("process function not found in script for source %s", event.SourceID)
+		logger.Warn("process function not found in script for source %s", event.SourceID)
 		vm.Pop(1)
 		return
 	}
@@ -297,25 +302,25 @@ func processEvent(event EventSource) {
 		if ch, ok := sinkChannels[sinkID]; ok {
 			ch <- emittedContent
 		} else {
-			log.Printf("Sink channel not found for sink %s", sinkID)
+			logger.Warn("Sink channel not found for sink %s", sinkID)
 		}
 		return 0
 	})
 
 	if err := vm.ProtectedCall(2, 0, 0); err != nil {
-		log.Printf("Failed to run process function for source %s: %v", event.SourceID, err)
+		logger.Error("Failed to run process function for source %s: %v", event.SourceID, err)
 	}
 }
 
 func sinkDbToRelayServer(sink Sink) {
 	if _, err := os.Stat(sink.DatabasePath); os.IsNotExist(err) {
-		log.Printf("Database file does not exist: %s", sink.DatabasePath)
+		logger.Info("Database file does not exist: %s", sink.DatabasePath)
 		return
 	}
 
 	sinkDB, err, _ := setupSql(sink.DatabasePath, false)
 	if err != nil {
-		log.Printf("Failed to open sink database: %v", err)
+		logger.Error("Failed to open sink database: %v", err)
 		return
 	}
 	defer sinkDB.Close()
@@ -323,7 +328,7 @@ func sinkDbToRelayServer(sink Sink) {
 	// Process sink_events
 	rows, err := sinkDB.Query("SELECT id, content FROM sink_events ORDER BY id ASC LIMIT 1000")
 	if err != nil {
-		log.Printf("Failed to query sink_events: %v", err)
+		logger.Error("Failed to query sink_events: %v", err)
 		return
 	}
 	defer rows.Close()
@@ -347,9 +352,9 @@ func sinkDbToRelayServer(sink Sink) {
 		var id int
 		var content string
 		err := rows.Scan(&id, &content)
-		log.Printf("Processing sink event: id=%d, content=%s", id, content)
+		logger.Debug("Processing sink event: id=%d, content=%s", id, content)
 		if err != nil {
-			log.Printf("Failed to scan row from sink_events: %v", err)
+			logger.Error("Failed to scan row from sink_events: %v", err)
 			continue
 		}
 
@@ -360,7 +365,7 @@ func sinkDbToRelayServer(sink Sink) {
 		// Send batch if we hit max events or size limit
 		if len(batchContent) >= 10 || batchSize >= 500*1024 {
 			if err := sendBatchContent(sink, batchContent, client); err != nil {
-				log.Printf("Failed to send batch content: %v", err)
+				logger.Error("Failed to send batch content: %v", err)
 				// Remove successful IDs from idsToDelete
 				idsToDelete = idsToDelete[len(batchContent):]
 			}
@@ -372,7 +377,7 @@ func sinkDbToRelayServer(sink Sink) {
 	// Send any remaining content
 	if len(batchContent) > 0 {
 		if err := sendBatchContent(sink, batchContent, client); err != nil {
-			log.Printf("Failed to send remaining batch content: %v", err)
+			logger.Error("Failed to send remaining batch content: %v", err)
 			// Remove successful IDs from idsToDelete
 			idsToDelete = idsToDelete[len(batchContent):]
 		}
@@ -382,7 +387,7 @@ func sinkDbToRelayServer(sink Sink) {
 		query := fmt.Sprintf("DELETE FROM sink_events WHERE id IN (%s)", strings.Trim(strings.Join(strings.Fields(fmt.Sprint(idsToDelete)), ","), "[]"))
 		_, err = sinkDB.Exec(query)
 		if err != nil {
-			log.Printf("Failed to delete records from sink_events: %v", err)
+			logger.Error("Failed to delete records from sink_events: %v", err)
 		}
 	}
 }
@@ -390,7 +395,7 @@ func sinkDbToRelayServer(sink Sink) {
 func sendBatchContent(sink Sink, contents []string, client *http.Client) error {
 	if sink.URL == relayURLSpecialValue {
 		for _, content := range contents {
-			fmt.Printf("Debug: Sending content to stdout: %s\n", content)
+			logger.Debug("Sending content to stdout: %s", content)
 		}
 		return nil
 	}
@@ -400,7 +405,7 @@ func sendBatchContent(sink Sink, contents []string, client *http.Client) error {
 		return fmt.Errorf("failed to marshal batch content: %v", err)
 	}
 
-	fmt.Printf("Debug: Sending batch content: %s\n", string(batchJSON))
+	logger.Debug("Sending batch content: %s", string(batchJSON))
 
 	req, err := http.NewRequest("POST", sink.URL+"record-batch", bytes.NewReader(batchJSON))
 	if err != nil {
@@ -443,13 +448,13 @@ func timerHandler(sourceID string) {
 		if ch, ok := sinkChannels[sinkID]; ok {
 			ch <- emittedContent
 		} else {
-			log.Printf("Sink channel not found for sink %s", sinkID)
+			logger.Warn("Sink channel not found for sink %s", sinkID)
 		}
 		return 0
 	})
 
 	if err := vm.ProtectedCall(1, 0, 0); err != nil {
-		log.Printf("Failed to run timer_handler function for source %s: %v", sourceID, err)
+		logger.Error("Failed to run timer_handler function for source %s: %v", sourceID, err)
 	}
 }
 
@@ -457,7 +462,7 @@ func main() {
 	if tsnetServer != nil {
 		go func() {
 			if err := tsnetServer.Start(); err != nil {
-				log.Fatalf("Failed to start tsnet server: %v", err)
+				logger.Fatal("Failed to start tsnet server: %v", err)
 			}
 		}()
 		defer tsnetServer.Close()
@@ -469,11 +474,11 @@ func main() {
 
 		source, ok := sources[sourceConfig.ID]
 		if !ok {
-			log.Fatalf("Source %s not initialized", sourceConfig.ID)
+			logger.Fatal("Source %s not initialized", sourceConfig.ID)
 		}
 
 		if err := source.Start(); err != nil {
-			log.Fatalf("Failed to start source %s: %v", sourceConfig.ID, err)
+			logger.Fatal("Failed to start source %s: %v", sourceConfig.ID, err)
 		}
 	}
 
@@ -481,9 +486,9 @@ func main() {
 		db, err, isSpaceError := initSetupSql(sink.DatabasePath, false)
 		if err != nil {
 			if !isSpaceError {
-				log.Fatalf("Error setting up SQL for sink %s: %v", sink.ID, err)
+				logger.Fatal("Error setting up SQL for sink %s: %v", sink.ID, err)
 			} else {
-				log.Printf("Warning: Space error setting up SQL for sink %s: %v", sink.ID, err)
+				logger.Warn("Space error setting up SQL for sink %s: %v", sink.ID, err)
 			}
 		}
 		db.Close()
@@ -495,17 +500,17 @@ func main() {
 					db.Close()
 					db = nil
 				}
-				log.Printf("Failed to open database for sink %s: %v", s.ID, err)
+				logger.Error("Failed to open database for sink %s: %v", s.ID, err)
 			}
 			insertCount := 0
 			for content := range sinkChannels[s.ID] {
 				insertCount++
 				if db == nil {
-					log.Printf("Database not ready for sink %s, waiting for next cycle", s.ID)
+					logger.Warn("Database not ready for sink %s, waiting for next cycle", s.ID)
 				} else {
 					_, err = db.Exec("INSERT INTO sink_events (content) VALUES (?)", content)
 					if err != nil {
-						log.Printf("Failed to insert into sink_events for sink %s: %v", s.ID, err)
+						logger.Error("Failed to insert into sink_events for sink %s: %v", s.ID, err)
 					}
 				}
 				if insertCount >= 100 {
@@ -521,7 +526,7 @@ func main() {
 							db.Close()
 							db = nil
 						}
-						log.Printf("Failed to reopen database for sink %s: %v", s.ID, err)
+						logger.Error("Failed to reopen database for sink %s: %v", s.ID, err)
 					}
 				}
 			}

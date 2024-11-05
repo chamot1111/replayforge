@@ -6,9 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"time"
+	"github.com/chamot1111/replayforge/pkgs/logger"
 )
 
 type LogFileSource struct {
@@ -68,7 +68,7 @@ func (l *LogFileSource) readLogFile() {
 			time.Sleep(time.Duration(l.HookInterval) * time.Millisecond)
 			return
 		}
-		log.Printf("Failed to open log file %s: %v", l.FilePath, err)
+		logger.Error("Failed to open log file %s: %v", l.FilePath, err)
 		time.Sleep(time.Duration(l.HookInterval) * time.Millisecond)
 		return
 	}
@@ -76,7 +76,7 @@ func (l *LogFileSource) readLogFile() {
 
 	checksum, err := l.calculateChecksum(file)
 	if err != nil {
-		log.Printf("Failed to calculate checksum for %s: %v", l.FilePath, err)
+		logger.Error("Failed to calculate checksum for %s: %v", l.FilePath, err)
 		time.Sleep(time.Duration(l.HookInterval) * time.Millisecond)
 		return
 	}
@@ -88,7 +88,7 @@ func (l *LogFileSource) readLogFile() {
 	}
 
 	if _, err = file.Seek(l.lastPosition, 0); err != nil {
-		log.Printf("Failed to seek to last position in file %s: %v", l.FilePath, err)
+		logger.Error("Failed to seek to last position in file %s: %v", l.FilePath, err)
 		return
 	}
 
@@ -97,10 +97,10 @@ func (l *LogFileSource) readLogFile() {
 	for scanner.Scan() {
 		line := scanner.Text()
 		// Process the line here
-		log.Printf("Read line: %s", line)
+		logger.Debug("Read line: %s", line)
 		bodyJSON, err := json.Marshal(map[string]string{"content": line})
 		if err != nil {
-			log.Printf("Error marshaling body JSON: %v", err)
+			logger.Error("Error marshaling body JSON: %v", err)
 			continue
 		}
 
@@ -115,7 +115,7 @@ func (l *LogFileSource) readLogFile() {
 
 		jsonContent, err := json.Marshal(wrapCallObject)
 		if err != nil {
-			log.Printf("Error marshaling JSON: %v", err)
+			logger.Error("Error marshaling JSON: %v", err)
 			return
 		}
 
@@ -130,7 +130,7 @@ func (l *LogFileSource) readLogFile() {
 			case l.EventChan <- event:
 				skippedEvent = false
 			case <-time.After(100 * time.Millisecond):
-				log.Printf("EventChan is full, skipping all next events")
+				logger.Warn("EventChan is full, skipping all next events")
 				skippedEvent = true
 			}
 		} else {
@@ -144,17 +144,17 @@ func (l *LogFileSource) readLogFile() {
 	}
 
 	if err := scanner.Err(); err != nil {
-		log.Printf("Error reading log file %s: %v", l.FilePath, err)
+		logger.Error("Error reading log file %s: %v", l.FilePath, err)
 	}
 
 	l.lastPosition, _ = file.Seek(0, 1) // Get current position
 
 	if l.RemoveAfterSecs > 0 && time.Since(l.lastTruncate) >= time.Duration(l.RemoveAfterSecs)*time.Second {
-		log.Printf("Attempting to truncate log file %s", l.FilePath)
+		logger.Info("Attempting to truncate log file %s", l.FilePath)
 		if err := os.Truncate(l.FilePath, 0); err != nil {
-			log.Printf("Failed to truncate log file %s: %v", l.FilePath, err)
+			logger.Error("Failed to truncate log file %s: %v", l.FilePath, err)
 		} else {
-			log.Printf("Successfully truncated log file %s after %d seconds", l.FilePath, l.RemoveAfterSecs)
+			logger.Info("Successfully truncated log file %s after %d seconds", l.FilePath, l.RemoveAfterSecs)
 			l.lastTruncate = time.Now()
 		}
 	}
