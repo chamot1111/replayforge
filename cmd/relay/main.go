@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/chamot1111/replayforge/internal/envparser"
@@ -24,6 +25,8 @@ var (
 	dbFolder   = "./"
 	port       int
 	config     Config
+	startTime  = time.Now()
+	statsMutex sync.RWMutex
 )
 
 type BucketConfig struct {
@@ -32,12 +35,25 @@ type BucketConfig struct {
 	Tls         int    `json:"tls"`
 }
 
+type BucketStats struct {
+	Kind                string    `json:"kind"`
+	ID                  string    `json:"id"`
+	RxMessagesByMinute  int       `json:"rxMessagesByMinute"`
+	RxMessagesSinceStart int      `json:"rxMessagesSinceStart"`
+	RxLastMessageDate   time.Time `json:"rxLastMessageDate"`
+	TxMessageByMinute   int       `json:"txMessageByMinute"`
+	TxLastAccess        time.Time `json:"txLastAccess"`
+}
+
 type Config struct {
 	Buckets         map[string]BucketConfig `json:"buckets"`
 	Port            int                     `json:"port"`
+	PortStatusZ     int                     `json:"portStatusZ"`
 	UseTailnet      bool                    `json:"useTailnet"`
 	TailnetHostname string                  `json:"tailnetHostname,omitempty"`
 }
+
+var bucketStats = make(map[string]*BucketStats)
 
 func init() {
 	logLevel := os.Getenv("LOG_LEVEL")
@@ -48,6 +64,26 @@ func init() {
 	flag.StringVar(&configPath, "c", "", "Path to config file")
 	flag.IntVar(&port, "p", 8081, "Port to listen on")
 	flag.Parse()
+}
+
+func handleStatusZ(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	statsMutex.RLock()
+	stats := struct {
+		Uptime string                   `json:"uptime"`
+		Buckets map[string]*BucketStats `json:"buckets"`
+	}{
+		Uptime:  time.Since(startTime).String(),
+		Buckets: bucketStats,
+	}
+	statsMutex.RUnlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(stats)
 }
 
 func main() {
@@ -79,9 +115,19 @@ func main() {
 		logger.Fatal("At least one bucket configuration is required")
 	}
 
+	statsMutex.Lock()
+	for bucket := range config.Buckets {
+		bucketStats[bucket] = &BucketStats{
+			Kind: "relay",
+			ID:   bucket,
+		}
+	}
+	statsMutex.Unlock()
+
 	logger.Info("Configuration:")
 	logger.Info("  Config Path: %s", configPath)
 	logger.Info("  Port: %d", port)
+	logger.Info("  StatusZ Port: %d", config.PortStatusZ)
 	logger.Info("  Use Tailnet: %v", config.UseTailnet)
 	logger.Info("  Buckets:")
 	for bucket, bucketConfig := range config.Buckets {
@@ -94,6 +140,21 @@ func main() {
 	mux.HandleFunc("/record-batch", handleRecordBatch)
 	mux.HandleFunc("/first-batch", handleFirstBatch)
 	mux.HandleFunc("/acknowledge-batch", handleAcknowledgeBatch)
+
+	// Start status server
+	if config.PortStatusZ > 0 {
+		go func() {
+			statusMux := http.NewServeMux()
+			statusMux.HandleFunc("/statusz", handleStatusZ)
+			statusMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+				w.Write([]byte("ok"))
+			})
+			logger.Info("Status server listening on port %d", config.PortStatusZ)
+			if err := http.ListenAndServe(fmt.Sprintf(":%d", config.PortStatusZ), statusMux); err != nil {
+				logger.Fatal("Status server error: %v", err)
+			}
+		}()
+	}
 
 	if config.UseTailnet {
 		hostname := "relay-forwarder"
@@ -153,6 +214,7 @@ func handleRecordBatch(w http.ResponseWriter, r *http.Request) {
 	buckets := strings.Split(r.Header.Get("RF-BUCKETS"), ",")
 	exceededBuckets := []string{}
 
+	now := time.Now()
 	for _, bucket := range buckets {
 		bucket = strings.TrimSpace(bucket)
 		if !verifyAuth(r.Header.Get("Authorization"), bucket) {
@@ -160,6 +222,15 @@ func handleRecordBatch(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Authentication failed", http.StatusUnauthorized)
 			return
 		}
+
+		// Update stats
+		statsMutex.Lock()
+		if stats, ok := bucketStats[bucket]; ok {
+			stats.RxMessagesByMinute += len(events)
+			stats.RxMessagesSinceStart += len(events)
+			stats.RxLastMessageDate = now
+		}
+		statsMutex.Unlock()
 
 		bucketConfig := config.Buckets[bucket]
 		dbFolderBucket := filepath.Join(dbFolder, bucket)
@@ -270,6 +341,13 @@ func handleFirstBatch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Authentication failed", http.StatusUnauthorized)
 		return
 	}
+
+	statsMutex.Lock()
+	if stats, ok := bucketStats[bucket]; ok {
+		stats.TxMessageByMinute++
+		stats.TxLastAccess = time.Now()
+	}
+	statsMutex.Unlock()
 
 	limitStr := r.URL.Query().Get("limit")
 	limit := 100 // Default limit

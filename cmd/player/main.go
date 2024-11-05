@@ -391,7 +391,8 @@ func OnServerHeartbeat(source Source, client *http.Client) {
 			return
 		}
 		if resp.StatusCode != 200 {
-			logger.Error("Unexpected status code: %d", resp.StatusCode)
+			body, _ := io.ReadAll(resp.Body)
+			logger.Error("Error fetching data from relay server - HTTP Status: %d. Response body received: %s.", resp.StatusCode, string(body))
 			if backoffIndex < len(backoffDelays) {
 				curBackoffToSkip = backoffDelays[backoffIndex]
 				backoffIndex = min(backoffIndex+1, len(backoffDelays)-1)
