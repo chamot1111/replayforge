@@ -218,3 +218,4 @@ func (s *NotificationSink) GetID() string {
 
 func (s *NotificationSink) GetExposedPort() (int, bool) {
 	return 0, false
+}
