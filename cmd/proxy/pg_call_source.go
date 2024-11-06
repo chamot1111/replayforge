@@ -24,6 +24,7 @@ type PgCallSource struct {
     ConnString  string
     Calls       []PgCall
     EventChan   chan<- EventSource
+    Path        string
 }
 
 func (h *PgCallSource) Init(config SourceConfig, eventChan chan<- EventSource) error {
@@ -36,6 +37,7 @@ func (h *PgCallSource) Init(config SourceConfig, eventChan chan<- EventSource) e
             Database       string    `json:"database"`
             ConnString     string    `json:"connString"`
             Calls          []PgCall  `json:"calls"`
+            Path          string    `json:"path"`
         } `json:"params"`
     }
     if err := json.Unmarshal(config.Params, &sourceConfig.Params); err != nil {
@@ -49,6 +51,10 @@ func (h *PgCallSource) Init(config SourceConfig, eventChan chan<- EventSource) e
     h.Database = sourceConfig.Params.Database
     h.ConnString = sourceConfig.Params.ConnString
     h.Calls = sourceConfig.Params.Calls
+    if sourceConfig.Params.Path == "" {
+        sourceConfig.Params.Path = "/"
+    }
+    h.Path = sourceConfig.Params.Path
     h.EventChan = eventChan
     return nil
 }
@@ -140,11 +146,11 @@ func (h *PgCallSource) executeCalls() error {
     }
 
     wrapCallObject := map[string]interface{}{
-        "path":    "/",
+        "path":    h.Path,
         "params":  map[string]interface{}{},
         "headers": map[string]interface{}{},
         "body":    string(jsonContent),
-        "method":  "GET",
+        "method":  "POST",
     }
 
     wrapJsonContent, err := json.Marshal(wrapCallObject)
