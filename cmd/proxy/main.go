@@ -69,6 +69,41 @@ type SourceConfig struct {
 	Params json.RawMessage `json:"params"`
 }
 
+type RateLimiter struct {
+	limit         int
+	count         int
+	lastReset     time.Time
+	mutex         sync.Mutex
+}
+
+func NewRateLimiter(limit int) *RateLimiter {
+	return &RateLimiter{
+		limit:     limit,
+		lastReset: time.Now(),
+	}
+}
+
+func (r *RateLimiter) Allow() bool {
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+
+	now := time.Now()
+	if now.Sub(r.lastReset) >= time.Minute {
+		r.count = 0
+		r.lastReset = now
+	}
+
+	if r.count >= r.limit {
+		return false
+	}
+
+	r.count++
+	return true
+}
+
+var rateLimiters = make(map[string]*RateLimiter)
+var rateLimitersMutex sync.RWMutex
+
 type Sink struct {
 	ID           string
 	Type         string
@@ -77,6 +112,7 @@ type Sink struct {
 	Buckets      []string
 	DatabasePath string
 	UseTsnet     bool `json:"useTsnet"`
+	MaxMessagesPerMinute int `json:"maxMessagesPerMinute"`
 }
 
 type Config struct {
@@ -123,6 +159,20 @@ var (
 	tsnetServer         *tsnet.Server
 	stats               Stats
 )
+
+func getRateLimiter(sinkID string, maxPerMinute int) *RateLimiter {
+	rateLimitersMutex.Lock()
+	defer rateLimitersMutex.Unlock()
+
+	if limiter, exists := rateLimiters[sinkID]; exists {
+		return limiter
+	}
+
+	limiter := NewRateLimiter(maxPerMinute)
+	rateLimiters[sinkID] = limiter
+	return limiter
+}
+
 func init() {
 	stats = Stats{
 		Sources: make(map[string]SourceStats),
@@ -506,6 +556,14 @@ func sendBatchContent(sink Sink, contents []string, client *http.Client) error {
 			logger.Debug("Sending content to stdout: %s", content)
 		}
 		return nil
+	}
+
+	if sink.MaxMessagesPerMinute > 0 {
+		limiter := getRateLimiter(sink.ID, sink.MaxMessagesPerMinute)
+
+		if !limiter.Allow() {
+			return fmt.Errorf("maximum messages per minute exceeded for sink %s", sink.ID)
+		}
 	}
 
 	batchJSON, err := json.Marshal(contents)
