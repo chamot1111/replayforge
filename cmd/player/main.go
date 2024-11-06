@@ -730,6 +730,8 @@ func main() {
 		}
 	}
 
+	startNodeInfoReporting()
+
 	ticker := time.NewTicker(time.Duration(heartbeatIntervalMs) * time.Millisecond)
 	defer ticker.Stop()
 
