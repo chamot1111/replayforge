@@ -56,6 +56,8 @@ type Config struct {
 }
 
 var bucketStats = make(map[string]*BucketStats)
+var envStats = make(map[string]*BucketStats)
+var hostnameStats = make(map[string]*BucketStats)
 
 func init() {
 	logLevel := os.Getenv("LOG_LEVEL")
@@ -80,9 +82,13 @@ func handleStatusZ(w http.ResponseWriter, r *http.Request) {
 	stats := struct {
 		Uptime string                   `json:"uptime"`
 		Buckets map[string]*BucketStats `json:"buckets"`
+		Envs map[string]*BucketStats `json:"envs"`
+		Hostnames map[string]*BucketStats `json:"hostnames"`
 	}{
 		Uptime:  time.Since(startTime).String(),
 		Buckets: bucketStats,
+		Envs: envStats,
+		Hostnames: hostnameStats,
 	}
 	statsMutex.RUnlock()
 
@@ -223,10 +229,14 @@ func handleRecordBatch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid JSON format", http.StatusBadRequest)
 		return
 	}
+
 	buckets := strings.Split(r.Header.Get("RF-BUCKETS"), ",")
 	exceededBuckets := []string{}
 
+	envName := r.Header.Get("RF-ENV-NAME")
+	hostname := r.Header.Get("RF-HOSTNAME")
 	now := time.Now()
+
 	for _, bucket := range buckets {
 		bucket = strings.TrimSpace(bucket)
 		if !verifyAuth(r.Header.Get("Authorization"), bucket) {
@@ -235,12 +245,46 @@ func handleRecordBatch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Update stats
+		// Update bucket stats
 		statsMutex.Lock()
 		if stats, ok := bucketStats[bucket]; ok {
 			stats.RxMessagesByMinute += len(events)
 			stats.RxMessagesSinceStart += len(events)
 			stats.RxLastMessageDate = now
+		}
+
+		// Update env stats if env name provided
+		if envName != "" {
+			if stats, ok := envStats[envName]; ok {
+				stats.RxMessagesByMinute += len(events)
+				stats.RxMessagesSinceStart += len(events)
+				stats.RxLastMessageDate = now
+			} else {
+				envStats[envName] = &BucketStats{
+					Kind: "env",
+					ID: envName,
+					RxMessagesByMinute: len(events),
+					RxMessagesSinceStart: len(events),
+					RxLastMessageDate: now,
+				}
+			}
+		}
+
+		// Update hostname stats if hostname provided
+		if hostname != "" {
+			if stats, ok := hostnameStats[hostname]; ok {
+				stats.RxMessagesByMinute += len(events)
+				stats.RxMessagesSinceStart += len(events)
+				stats.RxLastMessageDate = now
+			} else {
+				hostnameStats[hostname] = &BucketStats{
+					Kind: "hostname",
+					ID: hostname,
+					RxMessagesByMinute: len(events),
+					RxMessagesSinceStart: len(events),
+					RxLastMessageDate: now,
+				}
+			}
 		}
 		statsMutex.Unlock()
 
@@ -354,10 +398,28 @@ func handleFirstBatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	envName := r.Header.Get("RF-ENV-NAME")
+	hostname := r.Header.Get("RF-HOSTNAME")
+	now := time.Now()
+
 	statsMutex.Lock()
 	if stats, ok := bucketStats[bucket]; ok {
 		stats.TxMessageByMinute++
-		stats.TxLastAccess = time.Now()
+		stats.TxLastAccess = now
+	}
+
+	if envName != "" {
+		if stats, ok := envStats[envName]; ok {
+			stats.TxMessageByMinute++
+			stats.TxLastAccess = now
+		}
+	}
+
+	if hostname != "" {
+		if stats, ok := hostnameStats[hostname]; ok {
+			stats.TxMessageByMinute++
+			stats.TxLastAccess = now
+		}
 	}
 	statsMutex.Unlock()
 

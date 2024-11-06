@@ -21,7 +21,6 @@ import (
 	"github.com/chamot1111/replayforge/pkgs/lualibs"
 	"github.com/chamot1111/replayforge/pkgs/logger"
 )
-
 const (
 	relayURLSpecialValue = ":dbg>stdout:"
 	debugConfig          = `
@@ -52,9 +51,9 @@ const (
 )
 
 var (
- sinkBackoffDelays = make(map[string]time.Duration)
- maxBackoffDelay = 300 * time.Second
- initialBackoffDelay = 100 * time.Millisecond
+	sinkBackoffDelays = make(map[string]time.Duration)
+	maxBackoffDelay = 300 * time.Second
+	initialBackoffDelay = 100 * time.Millisecond
 )
 
 type BaseSource struct {
@@ -85,6 +84,8 @@ type Config struct {
 	Sinks         []Sink
 	TsnetHostname string `json:"tsnetHostname"`
 	PortStatusZ   int    `json:"portStatusZ"`
+	EnvName       string `json:"envName"`
+	HostName      string `json:"hostName"`
 }
 
 type Stats struct {
@@ -122,7 +123,6 @@ var (
 	tsnetServer         *tsnet.Server
 	stats               Stats
 )
-
 func init() {
 	stats = Stats{
 		Sources: make(map[string]SourceStats),
@@ -167,6 +167,13 @@ func init() {
 
 	if err := json.Unmarshal(configData, &config); err != nil {
 		logger.Fatal("Failed to parse config JSON: %v", err)
+	}
+
+	if config.HostName == "" {
+		hostname, err := os.Hostname()
+		if err == nil {
+			config.HostName = hostname
+		}
 	}
 
 	vms = make(map[string]*lua.State)
@@ -516,6 +523,10 @@ func sendBatchContent(sink Sink, contents []string, client *http.Client) error {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+sink.AuthBearer)
 	req.Header.Set("RF-BUCKETS", strings.Join(sink.Buckets, ","))
+	if config.EnvName != "" {
+		req.Header.Set("RF-ENV-NAME", config.EnvName)
+	}
+	req.Header.Set("RF-HOSTNAME", config.HostName)
 
 	resp, err := client.Do(req)
 	if err != nil {

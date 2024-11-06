@@ -24,6 +24,7 @@ import (
 	"github.com/vjeantet/grok"
 	"tailscale.com/tsnet"
 )
+
 type Source struct {
 	Name                      string
 	RelayAuthenticationBearer string
@@ -64,6 +65,8 @@ var (
 	globalListenAddress string
 	listenUsingTailscale bool
 	staticFolderPath     string
+	envName            string
+	hostName           string
 )
 
 func timerHandler(sourceID string) {
@@ -141,6 +144,20 @@ func init() {
 	}
 
 	relayUrl = config["relayUrl"].(string)
+
+	if val, ok := config["envName"].(string); ok {
+		envName = val
+	}
+
+	if val, ok := config["hostName"].(string); ok {
+		hostName = val
+	}
+	if hostName == "" {
+		hostname, err := os.Hostname()
+		if err == nil {
+			hostName = hostname
+		}
+	}
 
 	// Check if tsnet is configured
 	if tsnetConfig, ok := config["tsnet"].(map[string]interface{}); ok {
@@ -352,7 +369,7 @@ var (
 	curBackoffToSkip = 0
 )
 
-func OnServerHeartbeat(source Source, client *http.Client) {
+func OnServerHeartbeat(source *Source, client *http.Client) {
 	source.mu.Lock()
 	defer source.mu.Unlock()
 
@@ -374,6 +391,10 @@ func OnServerHeartbeat(source Source, client *http.Client) {
 
 		req.Header.Set("RF-BUCKET", source.Name)
 		req.Header.Set("Authorization", "Bearer "+source.RelayAuthenticationBearer)
+		if envName != "" {
+			req.Header.Set("RF-ENV-NAME", envName)
+		}
+		req.Header.Set("RF-HOSTNAME", hostName)
 
 		resp, err := client.Do(req)
 		if err != nil {
@@ -490,6 +511,10 @@ func OnServerHeartbeat(source Source, client *http.Client) {
 			ackReq.Header.Set("RF-BUCKET", source.Name)
 			ackReq.Header.Set("Authorization", "Bearer "+source.RelayAuthenticationBearer)
 			ackReq.Header.Set("Content-Type", "application/json")
+			if envName != "" {
+				ackReq.Header.Set("RF-ENV-NAME", envName)
+			}
+			ackReq.Header.Set("RF-HOSTNAME", hostName)
 
 			ackResp, err := client.Do(ackReq)
 			if err != nil {
@@ -623,17 +648,17 @@ func main() {
 		}(sinkName, sink)
 	}
 
-	for _, source := range sources {
-		source := source // Shadow variable to avoid closure issues
+	for i := range sources {
+		source := &sources[i] // Use pointer to avoid copying mutex
 		if source.HookInterval > 0 {
-			go func() {
-				ticker := time.NewTicker(source.HookInterval)
+			go func(s *Source) {
+				ticker := time.NewTicker(s.HookInterval)
 				defer ticker.Stop()
 
 				for range ticker.C {
-					timerHandler(source.Name)
+					timerHandler(s.Name)
 				}
-			}()
+			}(source)
 		}
 	}
 
@@ -641,8 +666,8 @@ func main() {
 	defer ticker.Stop()
 
 	for range ticker.C {
-		for _, source := range sources {
-			OnServerHeartbeat(source, client)
+		for i := range sources {
+			OnServerHeartbeat(&sources[i], client)
 		}
 	}
 }
