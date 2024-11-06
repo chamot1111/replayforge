@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 	"fmt"
+	"runtime"
 
 	"github.com/chamot1111/replayforge/pkgs/lualibs"
 	"github.com/chamot1111/replayforge/pkgs/playerplugin"
@@ -23,6 +24,8 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/vjeantet/grok"
 	"tailscale.com/tsnet"
+	"github.com/shirou/gopsutil/v4/mem"
+	"github.com/shirou/gopsutil/v4/cpu"
 )
 
 type Source struct {
@@ -545,6 +548,71 @@ func OnServerHeartbeat(source *Source, client *http.Client) {
 		// Reset backoff on successful processing
 		backoffIndex = 0
 	}
+}
+
+func startNodeInfoReporting() {
+ go func() {
+  for {
+   var memStats runtime.MemStats
+   runtime.ReadMemStats(&memStats)
+
+   v, _ := mem.VirtualMemory()
+   c, _ := cpu.Percent(time.Second, false)
+
+   nodeInfo := struct {
+    MemoryProcess      float64   `json:"memoryProcess"`
+    MemoryHostTotal    float64   `json:"memoryHostTotal"`
+    MemoryHostFree     float64   `json:"memoryHostFree"`
+    MemoryHostUsedPct  float64   `json:"memoryHostUsedPct"`
+    CpuPercentHost     float64   `json:"cpuPercentHost"`
+    LastUpdated        time.Time `json:"lastUpdated"`
+   }{
+    MemoryProcess:     float64(memStats.Alloc),
+    MemoryHostTotal:   float64(v.Total),
+    MemoryHostFree:    float64(v.Free),
+    MemoryHostUsedPct: v.UsedPercent,
+    CpuPercentHost:    c[0],
+    LastUpdated:       time.Now(),
+   }
+
+   jsonData, err := json.Marshal(nodeInfo)
+   if err != nil {
+    logger.Error("Failed to marshal node info: %v", err)
+    continue
+   }
+
+   // Send node info to relay server for first source only
+   if len(sources) > 0 {
+    client := &http.Client{
+     Timeout: time.Second,
+    }
+
+    req, err := http.NewRequest("POST", relayUrl+"node-info", bytes.NewBuffer(jsonData))
+    if err != nil {
+     logger.Error("Failed to create node info request: %v", err)
+    } else {
+     req.Header.Set("Content-Type", "application/json")
+     req.Header.Set("RF-BUCKET", sources[0].Name)
+     if sources[0].RelayAuthenticationBearer != "" {
+         req.Header.Set("Authorization", "Bearer "+sources[0].RelayAuthenticationBearer)
+     }
+     if envName != "" {
+      req.Header.Set("RF-ENV-NAME", envName)
+     }
+     req.Header.Set("RF-HOSTNAME", hostName)
+
+     resp, err := client.Do(req)
+     if err != nil {
+      logger.Error("Failed to send node info: %v", err)
+     } else {
+      resp.Body.Close()
+     }
+    }
+   }
+
+   time.Sleep(time.Minute)
+  }
+ }()
 }
 
 func main() {

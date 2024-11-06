@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"runtime"
 
 	"github.com/Shopify/go-lua"
 	_ "github.com/mattn/go-sqlite3"
@@ -20,6 +21,8 @@ import (
 
 	"github.com/chamot1111/replayforge/pkgs/lualibs"
 	"github.com/chamot1111/replayforge/pkgs/logger"
+	"github.com/shirou/gopsutil/v4/mem"
+	"github.com/shirou/gopsutil/v4/cpu"
 )
 const (
 	relayURLSpecialValue = ":dbg>stdout:"
@@ -49,7 +52,6 @@ const (
 	}
 `
 )
-
 var (
 	sinkBackoffDelays = make(map[string]time.Duration)
 	maxBackoffDelay = 300 * time.Second
@@ -628,6 +630,79 @@ func timerHandler(sourceID string) {
 	}
 }
 
+func startNodeInfoReporting() {
+ go func() {
+  for {
+   var memStats runtime.MemStats
+   runtime.ReadMemStats(&memStats)
+
+   v, _ := mem.VirtualMemory()
+   c, _ := cpu.Percent(time.Second, false)
+
+   nodeInfo := struct {
+	  MemoryProcess      float64   `json:"memoryProcess"`
+	  MemoryHostTotal    float64   `json:"memoryHostTotal"`
+	  MemoryHostFree     float64   `json:"memoryHostFree"`
+	  MemoryHostUsedPct  float64   `json:"memoryHostUsedPct"`
+	  CpuPercentHost   float64   `json:"cpuPercentHost"`
+	  LastUpdated time.Time `json:"lastUpdated"`
+	    }{
+	  MemoryProcess:     float64(memStats.Alloc),
+	  MemoryHostTotal:   float64(v.Total),
+	  MemoryHostFree:    float64(v.Free),
+	  MemoryHostUsedPct: v.UsedPercent,
+	  CpuPercentHost:    c[0],
+	  LastUpdated:       time.Now(),
+   }
+
+   jsonData, err := json.Marshal(nodeInfo)
+   if err != nil {
+    logger.Error("Failed to marshal node info: %v", err)
+    continue
+   }
+   // Keep track of URLs we've already sent to
+   sentUrls := make(map[string]bool)
+
+   for _, sink := range config.Sinks {
+    // Skip if we've already sent to this URL
+    if sentUrls[sink.URL] {
+      continue
+    }
+    sentUrls[sink.URL] = true
+
+    var client *http.Client
+    if sink.UseTsnet && tsnetServer != nil {
+     client = tsnetServer.HTTPClient()
+    } else {
+     client = &http.Client{
+      Timeout: time.Second,
+     }
+    }
+
+    req, err := http.NewRequest("POST", sink.URL+"node-info", bytes.NewBuffer(jsonData))
+    if err != nil {
+     logger.Error("Failed to create node info request: %v", err)
+     continue
+    }
+
+    req.Header.Set("Content-Type", "application/json")
+    if sink.AuthBearer != "" {
+      req.Header.Set("Authorization", "Bearer "+sink.AuthBearer)
+    }
+
+    resp, err := client.Do(req)
+    if err != nil {
+     logger.Error("Failed to send node info: %v", err)
+     continue
+    }
+    resp.Body.Close()
+   }
+
+   time.Sleep(time.Minute)
+  }
+ }()
+}
+
 func main() {
 	if tsnetServer != nil {
 		go func() {
@@ -754,6 +829,8 @@ func main() {
 		})
 		go http.ListenAndServe(fmt.Sprintf(":%d", config.PortStatusZ), mux)
 	}
+
+	startNodeInfoReporting()
 
 	select {}
 }

@@ -29,7 +29,17 @@ var (
 	startTime  = time.Now()
 	statsMutex sync.RWMutex
 	enablePprof bool
+	nodeInfoStats = make(map[string]*NodeInfo)
 )
+
+type NodeInfo struct {
+	MemoryProcess      float64   `json:"memoryProcess"`
+	MemoryHostTotal    float64   `json:"memoryHostTotal"`
+	MemoryHostFree     float64   `json:"memoryHostFree"`
+	MemoryHostUsedPct  float64   `json:"memoryHostUsedPct"`
+	CpuPercentHost   float64   `json:"cpuPercentHost"`
+	LastUpdated time.Time `json:"lastUpdated"`
+}
 
 type BucketConfig struct {
 	Auth        string `json:"auth"`
@@ -74,6 +84,44 @@ func init() {
 	flag.Parse()
 }
 
+func handleNodeInfo(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	bucket := r.Header.Get("RF-BUCKET")
+	if bucket == "" {
+		http.Error(w, "Missing RF-BUCKET header", http.StatusBadRequest)
+		return
+	}
+
+	if !verifyAuth(r.Header.Get("Authorization"), bucket) {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	hostname := r.Header.Get("RF-HOSTNAME")
+	if hostname == "" {
+		http.Error(w, "Missing RF-HOSTNAME header", http.StatusBadRequest)
+		return
+	}
+
+	var info NodeInfo
+	if err := json.NewDecoder(r.Body).Decode(&info); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	info.LastUpdated = time.Now()
+
+	statsMutex.Lock()
+	nodeInfoStats[hostname] = &info
+	statsMutex.Unlock()
+
+	w.WriteHeader(http.StatusOK)
+}
+
 func handleStatusZ(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -86,11 +134,13 @@ func handleStatusZ(w http.ResponseWriter, r *http.Request) {
 		Buckets map[string]*BucketStats `json:"buckets"`
 		Envs map[string]*BucketStats `json:"envs"`
 		Hostnames map[string]*BucketStats `json:"hostnames"`
+		NodeInfo map[string]*NodeInfo    `json:"nodeInfo"`
 	}{
 		Uptime:  time.Since(startTime).String(),
 		Buckets: bucketStats,
 		Envs: envStats,
 		Hostnames: hostnameStats,
+		NodeInfo: nodeInfoStats,
 	}
 	statsMutex.RUnlock()
 
@@ -152,6 +202,7 @@ func main() {
 	mux.HandleFunc("/record-batch", handleRecordBatch)
 	mux.HandleFunc("/first-batch", handleFirstBatch)
 	mux.HandleFunc("/acknowledge-batch", handleAcknowledgeBatch)
+	mux.HandleFunc("/node-info", handleNodeInfo)
 
 	// Start pprof server if enabled
 	if enablePprof {
