@@ -43,7 +43,9 @@ type BucketStats struct {
 	RxMessagesByMinute  int       `json:"rxMessagesByMinute"`
 	RxMessagesSinceStart int      `json:"rxMessagesSinceStart"`
 	RxLastMessageDate   time.Time `json:"rxLastMessageDate"`
+	RxQueryByMinute     int       `json:"rxQueryByMinute"`
 	TxMessageByMinute   int       `json:"txMessageByMinute"`
+	TxQueryByMinute     int       `json:"txQueryByMinute"`
 	TxLastAccess        time.Time `json:"txLastAccess"`
 }
 
@@ -251,6 +253,7 @@ func handleRecordBatch(w http.ResponseWriter, r *http.Request) {
 			stats.RxMessagesByMinute += len(events)
 			stats.RxMessagesSinceStart += len(events)
 			stats.RxLastMessageDate = now
+			stats.RxQueryByMinute++
 		}
 
 		// Update env stats if env name provided
@@ -259,6 +262,7 @@ func handleRecordBatch(w http.ResponseWriter, r *http.Request) {
 				stats.RxMessagesByMinute += len(events)
 				stats.RxMessagesSinceStart += len(events)
 				stats.RxLastMessageDate = now
+				stats.RxQueryByMinute++
 			} else {
 				envStats[envName] = &BucketStats{
 					Kind: "env",
@@ -266,6 +270,7 @@ func handleRecordBatch(w http.ResponseWriter, r *http.Request) {
 					RxMessagesByMinute: len(events),
 					RxMessagesSinceStart: len(events),
 					RxLastMessageDate: now,
+					RxQueryByMinute: 1,
 				}
 			}
 		}
@@ -276,6 +281,7 @@ func handleRecordBatch(w http.ResponseWriter, r *http.Request) {
 				stats.RxMessagesByMinute += len(events)
 				stats.RxMessagesSinceStart += len(events)
 				stats.RxLastMessageDate = now
+				stats.RxQueryByMinute++
 			} else {
 				hostnameStats[hostname] = &BucketStats{
 					Kind: "hostname",
@@ -283,6 +289,7 @@ func handleRecordBatch(w http.ResponseWriter, r *http.Request) {
 					RxMessagesByMinute: len(events),
 					RxMessagesSinceStart: len(events),
 					RxLastMessageDate: now,
+					RxQueryByMinute: 1,
 				}
 			}
 		}
@@ -377,7 +384,6 @@ func handleRecordBatch(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 }
-
 func handleFirstBatch(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		logger.Warn("Method not allowed: %s", r.Method)
@@ -401,41 +407,6 @@ func handleFirstBatch(w http.ResponseWriter, r *http.Request) {
 	envName := r.Header.Get("RF-ENV-NAME")
 	hostname := r.Header.Get("RF-HOSTNAME")
 	now := time.Now()
-
-	statsMutex.Lock()
-	if stats, ok := bucketStats[bucket]; ok {
-		stats.TxMessageByMinute++
-		stats.TxLastAccess = now
-	}
-
-	if envName != "" {
-		if stats, ok := envStats[envName]; ok {
-			stats.TxMessageByMinute++
-			stats.TxLastAccess = now
-		} else {
-			envStats[envName] = &BucketStats{
-				Kind: "env",
-				ID: envName,
-				TxMessageByMinute: 1,
-				TxLastAccess: now,
-			}
-		}
-	}
-
-	if hostname != "" {
-		if stats, ok := hostnameStats[hostname]; ok {
-			stats.TxMessageByMinute++
-			stats.TxLastAccess = now
-		} else {
-			hostnameStats[hostname] = &BucketStats{
-				Kind: "hostname",
-				ID: hostname,
-				TxMessageByMinute: 1,
-				TxLastAccess: now,
-			}
-		}
-	}
-	statsMutex.Unlock()
 
 	limitStr := r.URL.Query().Get("limit")
 	limit := 100 // Default limit
@@ -500,6 +471,46 @@ func handleFirstBatch(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("[]"))
 		return
 	}
+
+	statsMutex.Lock()
+	if stats, ok := bucketStats[bucket]; ok {
+		stats.TxQueryByMinute++
+		stats.TxMessageByMinute += len(results)
+		stats.TxLastAccess = now
+	}
+
+	if envName != "" {
+		if stats, ok := envStats[envName]; ok {
+			stats.TxQueryByMinute++
+			stats.TxMessageByMinute += len(results)
+			stats.TxLastAccess = now
+		} else {
+			envStats[envName] = &BucketStats{
+				Kind: "env",
+				ID: envName,
+				TxQueryByMinute: 1,
+				TxMessageByMinute: len(results),
+				TxLastAccess: now,
+			}
+		}
+	}
+
+	if hostname != "" {
+		if stats, ok := hostnameStats[hostname]; ok {
+			stats.TxQueryByMinute++
+			stats.TxMessageByMinute += len(results)
+			stats.TxLastAccess = now
+		} else {
+			hostnameStats[hostname] = &BucketStats{
+				Kind: "hostname",
+				ID: hostname,
+				TxQueryByMinute: 1,
+				TxMessageByMinute: len(results),
+				TxLastAccess: now,
+			}
+		}
+	}
+	statsMutex.Unlock()
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -589,4 +600,3 @@ func handleAcknowledgeBatch(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(fmt.Sprintf("%d records deleted successfully", rowsAffected)))
-}
