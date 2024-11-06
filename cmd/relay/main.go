@@ -600,3 +600,4 @@ func handleAcknowledgeBatch(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(fmt.Sprintf("%d records deleted successfully", rowsAffected)))
+}
