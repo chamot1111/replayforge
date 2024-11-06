@@ -412,6 +412,13 @@ func handleFirstBatch(w http.ResponseWriter, r *http.Request) {
 		if stats, ok := envStats[envName]; ok {
 			stats.TxMessageByMinute++
 			stats.TxLastAccess = now
+		} else {
+			envStats[envName] = &BucketStats{
+				Kind: "env",
+				ID: envName,
+				TxMessageByMinute: 1,
+				TxLastAccess: now,
+			}
 		}
 	}
 
@@ -419,6 +426,13 @@ func handleFirstBatch(w http.ResponseWriter, r *http.Request) {
 		if stats, ok := hostnameStats[hostname]; ok {
 			stats.TxMessageByMinute++
 			stats.TxLastAccess = now
+		} else {
+			hostnameStats[hostname] = &BucketStats{
+				Kind: "hostname",
+				ID: hostname,
+				TxMessageByMinute: 1,
+				TxLastAccess: now,
+			}
 		}
 	}
 	statsMutex.Unlock()
