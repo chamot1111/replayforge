@@ -362,7 +362,11 @@ func init() {
 	}
 
 	for _, source := range sources {
-		logger.Info("Source: %s, RelayAuthenticationBearer: %s", source.Name, source.RelayAuthenticationBearer)
+		maskedBearer := source.RelayAuthenticationBearer
+		if len(maskedBearer) > 2 {
+			maskedBearer = maskedBearer[0:2] + "***"
+		}
+		logger.Info("Source: %s, RelayAuthenticationBearer: %s", source.Name, maskedBearer)
 	}
 }
 
