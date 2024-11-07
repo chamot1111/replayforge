@@ -55,7 +55,7 @@ func (s *SqliteSink) Init(config playerplugin.SinkConfig) error {
 
 	s.StaticDir, ok = params["static_dir"].(string)
 	if !ok {
-		return fmt.Errorf("static_dir not found in params or not a string")
+		s.StaticDir = "" // Make static_dir optional by using empty string as default
 	}
 
 	db, err := sql.Open("sqlite3", dbPath+"?_auto_vacuum=1&_journal_mode=WAL&_synchronous=NORMAL")
@@ -73,7 +73,9 @@ func (s *SqliteSink) Start() error {
 	// Start HTTP server
 	mux := http.NewServeMux()
 	mux.HandleFunc(fmt.Sprintf("/%s/rpf-db/", s.ID), s.handleGetRequest)
-	mux.Handle(fmt.Sprintf("/%s/static/", s.ID), http.StripPrefix(fmt.Sprintf("/%s/static/", s.ID), http.FileServer(http.Dir(s.StaticDir))))
+	if s.StaticDir != "" {
+		mux.Handle(fmt.Sprintf("/%s/static/", s.ID), http.StripPrefix(fmt.Sprintf("/%s/static/", s.ID), http.FileServer(http.Dir(s.StaticDir))))
+	}
 	logger.Info("Starting HTTP server on %s", s.ListenAddr)
 	go func() {
 		srv := &http.Server{
