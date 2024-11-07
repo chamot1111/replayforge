@@ -56,6 +56,7 @@ var (
 	sinkBackoffDelays = make(map[string]time.Duration)
 	maxBackoffDelay = 300 * time.Second
 	initialBackoffDelay = 100 * time.Millisecond
+	defaultRateLimit = 600 // Default rate limit of 6000 messages per minute
 )
 
 type BaseSource struct {
@@ -175,209 +176,11 @@ func getRateLimiter(sinkID string, maxPerMinute int) *RateLimiter {
 	return limiter
 }
 
-func init() {
-	stats = Stats{
-		Sources: make(map[string]SourceStats),
-		Sinks:   make(map[string]SinkStats),
-		Started: time.Now(),
-	}
-
-	logLevel := os.Getenv("LOG_LEVEL")
-	if logLevel != "" {
-		logger.SetLogLevel(logLevel)
-	}
-
-	var dbgScriptPath, dbgFilePath string
-	flag.StringVar(&configPath, "c", "", "Path to config file")
-	flag.StringVar(&dbgScriptPath, "dbg", "", "Debug mode: path to script file")
-	flag.StringVar(&dbgFilePath, "dbg-file", "", "Debug mode: path to input file")
-	flag.Parse()
-
-	if configPath == "" && dbgScriptPath == "" {
-		logger.Fatal("Either config file path (-c) or debug script path (--dbg) must be provided")
-	}
-	var configData []byte
-	if dbgScriptPath != "" {
-		if dbgFilePath == "" {
-			logger.Fatal("In debug mode, both script path (--dbg) and file path (--dbg-file) must be provided")
-		}
-		configData = []byte(strings.Replace(strings.Replace(debugConfig, "${script_path}", dbgScriptPath, -1), "${file_path}", dbgFilePath, -1))
-	} else {
-		logger.Info("Config path: %s", configPath)
-		var err error
-		configData, err = os.ReadFile(configPath)
-		if err != nil {
-			logger.Fatal("Failed to read config file: %v", err)
-		}
-	}
-
-	configDataStr, err := envparser.ProcessJSONWithEnvVars(string(configData))
-	if err != nil {
-		logger.Fatal("Failed to process config file with environment variables: %v", err)
-	}
-	configData = []byte(configDataStr)
-
-	if err := json.Unmarshal(configData, &config); err != nil {
-		logger.Fatal("Failed to parse config JSON: %v", err)
-	}
-
-	if config.HostName == "" {
-		hostname, err := os.Hostname()
-		if err == nil {
-			config.HostName = hostname
-		}
-	}
-
-	vms = make(map[string]*lua.State)
-	lastVacuumTimes = make(map[string]time.Time)
-	sources = make(map[string]Source)
-	sinkChannels = make(map[string]chan string)
-
-	for i := range config.Sinks {
-		sink := &config.Sinks[i]
-		if sink.DatabasePath == "" {
-			sink.DatabasePath = fmt.Sprintf("%s-sink.sqlite3", sink.ID)
-		}
-
-		if sink.URL != relayURLSpecialValue && !strings.HasSuffix(sink.URL, "/") {
-			sink.URL += "/"
-		}
-		sinkChannels[sink.ID] = make(chan string, 100)
-		db, err, isSpaceError := initSetupSql(sink.DatabasePath, false)
-		if err != nil {
-			if !isSpaceError {
-				logger.Fatal("Error setting up SQL for sink %s: %v", sink.ID, err)
-			} else {
-				logger.Warn("Space error setting up SQL for sink %s: %v", sink.ID, err)
-			}
-		}
-		db.Close()
-
-		stats.Lock()
-		stats.Sinks[sink.ID] = SinkStats{
-			ID:  sink.ID,
-			URL: sink.URL,
-		}
-		stats.Unlock()
-	}
-
-	for i := range config.Sinks {
-		sinkBackoffDelays[config.Sinks[i].ID] = initialBackoffDelay
-	}
-
-	if config.TsnetHostname != "" {
-		tsnetServer = &tsnet.Server{Hostname: config.TsnetHostname}
-	} else {
-		// Log warning but continue if a sink uses tsnet without hostname
-		for _, sink := range config.Sinks {
-			if sink.UseTsnet {
-				logger.Error("Sink %s uses tsnet but no tsnetHostname is configured", sink.ID)
-			}
-		}
-	}
-
-	for _, rawSource := range config.Sources {
-		var sourceConfig SourceConfig
-		if err := json.Unmarshal(rawSource, &sourceConfig); err != nil {
-			logger.Fatal("Failed to parse source JSON: %v", err)
-		}
-
-		var source Source
-		switch sourceConfig.Type {
-		case "http":
-			source = &HTTPSource{}
-		case "logfile":
-			source = &LogFileSource{}
-		case "repeatfile":
-			source = &RepeatFileSource{}
-		case "pgcall":
-			source = &PgCallSource{}
-		default:
-			logger.Fatal("Unsupported source type: %s", sourceConfig.Type)
-		}
-
-		eventChan := make(chan EventSource)
-		if err := source.Init(sourceConfig, eventChan); err != nil {
-			logger.Fatal("Failed to initialize source %s: %v", sourceConfig.ID, err)
-		}
-
-		sources[sourceConfig.ID] = source
-
-		stats.Lock()
-		stats.Sources[sourceConfig.ID] = SourceStats{
-			Type: sourceConfig.Type,
-			ID:   sourceConfig.ID,
-		}
-		stats.Unlock()
-
-		go func(s Source, ch <-chan EventSource) {
-			for event := range ch {
-				stats.Lock()
-				sourceStats := stats.Sources[event.SourceID]
-				sourceStats.MessagesByMinute++
-				sourceStats.MessagesSinceStart++
-				sourceStats.LastMessageDate = time.Now()
-				stats.Sources[event.SourceID] = sourceStats
-				stats.Unlock()
-				processEvent(event)
-			}
-		}(source, eventChan)
-
-		vm := lua.NewState()
-		lua.OpenLibraries(vm)
-
-		lualibs.RegisterLuaLibs(vm)
-
-		if sourceConfig.TransformScript != "" {
-			script, err := os.ReadFile(sourceConfig.TransformScript)
-			if err != nil {
-				logger.Fatal("Failed to read script file for source %s: %v", sourceConfig.ID, err)
-			}
-			if err := lua.DoString(vm, string(script)); err != nil {
-				logger.Fatal("Failed to load script for source %s: %v", sourceConfig.ID, err)
-			}
-		} else if sourceConfig.TargetSink != "" {
-			defaultScript := fmt.Sprintf(`
-				function Process(event, emit)
-					emit("%s", event)
-				end
-			`, sourceConfig.TargetSink)
-			if err := lua.DoString(vm, defaultScript); err != nil {
-				logger.Fatal("Failed to load default script for source %s: %v", sourceConfig.ID, err)
-			}
-		} else {
-			logger.Fatal("Either TransformScript or TargetSink must be provided for source %s", sourceConfig.ID)
-		}
-
-		vm.Global("init")
-		if vm.IsFunction(-1) {
-			if err := vm.ProtectedCall(0, 0, 0); err != nil {
-				logger.Fatal("Failed to run init hook for source %s: %v", sourceConfig.ID, err)
-			}
-		}
-		vm.Pop(1)
-
-		vms[sourceConfig.ID] = vm
-	}
-
-	// Start goroutine to reset messages per minute
-	go func() {
-		for {
-			time.Sleep(time.Minute)
-			stats.Lock()
-			for id := range stats.Sources {
-				source := stats.Sources[id]
-				source.MessagesByMinute = 0
-				stats.Sources[id] = source
-			}
-			for id := range stats.Sinks {
-				sink := stats.Sinks[id]
-				sink.MessagesByMinute = 0
-				stats.Sinks[id] = sink
-			}
-			stats.Unlock()
-		}
-	}()
+func getSinkMaxMessagesPerMinute(sink Sink) int {
+ if sink.MaxMessagesPerMinute == 0 {
+  return defaultRateLimit
+ }
+ return sink.MaxMessagesPerMinute
 }
 
 func setupSql(dbPath string, canVacuum bool) (*sql.DB, error, bool) {
@@ -567,9 +370,9 @@ func sendBatchContent(sink Sink, contents []string, client *http.Client) error {
 		return nil
 	}
 
-	if sink.MaxMessagesPerMinute > 0 {
-		limiter := getRateLimiter(sink.ID, sink.MaxMessagesPerMinute)
-
+	maxPerMinute := getSinkMaxMessagesPerMinute(sink)
+	if maxPerMinute > 0 {
+		limiter := getRateLimiter(sink.ID, maxPerMinute)
 		if !limiter.Allow() {
 			return fmt.Errorf("maximum messages per minute exceeded for sink %s", sink.ID)
 		}
