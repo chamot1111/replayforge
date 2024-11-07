@@ -39,6 +39,8 @@ type NodeInfo struct {
 	MemoryHostUsedPct  float64   `json:"memoryHostUsedPct"`
 	CpuPercentHost   float64   `json:"cpuPercentHost"`
 	LastUpdated time.Time `json:"lastUpdated"`
+	WarnCount int `json:"warnCount"`
+	ErrorCount int `json:"errorCount"`
 }
 
 type BucketConfig struct {

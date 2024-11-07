@@ -267,6 +267,13 @@ func init() {
 
 	if config.TsnetHostname != "" {
 		tsnetServer = &tsnet.Server{Hostname: config.TsnetHostname}
+	} else {
+		// Log warning but continue if a sink uses tsnet without hostname
+		for _, sink := range config.Sinks {
+			if sink.UseTsnet {
+				logger.Error("Sink %s uses tsnet but no tsnetHostname is configured", sink.ID)
+			}
+		}
 	}
 
 	for _, rawSource := range config.Sources {
@@ -638,21 +645,25 @@ func startNodeInfoReporting() {
 
    v, _ := mem.VirtualMemory()
    c, _ := cpu.Percent(time.Second, false)
-
+   warnCount, errorCount := logger.GetLogStats()
    nodeInfo := struct {
-	  MemoryProcess      float64   `json:"memoryProcess"`
-	  MemoryHostTotal    float64   `json:"memoryHostTotal"`
-	  MemoryHostFree     float64   `json:"memoryHostFree"`
-	  MemoryHostUsedPct  float64   `json:"memoryHostUsedPct"`
-	  CpuPercentHost   float64   `json:"cpuPercentHost"`
-	  LastUpdated time.Time `json:"lastUpdated"`
-	    }{
-	  MemoryProcess:     float64(memStats.Alloc),
-	  MemoryHostTotal:   float64(v.Total),
-	  MemoryHostFree:    float64(v.Free),
-	  MemoryHostUsedPct: v.UsedPercent,
-	  CpuPercentHost:    c[0],
-	  LastUpdated:       time.Now(),
+    MemoryProcess      float64   `json:"memoryProcess"`
+    MemoryHostTotal    float64   `json:"memoryHostTotal"`
+    MemoryHostFree     float64   `json:"memoryHostFree"`
+    MemoryHostUsedPct  float64   `json:"memoryHostUsedPct"`
+    CpuPercentHost     float64   `json:"cpuPercentHost"`
+    LastUpdated        time.Time `json:"lastUpdated"`
+    WarnCount         int64       `json:"warnCount"`
+    ErrorCount        int64       `json:"errorCount"`
+   }{
+    MemoryProcess:     float64(memStats.Alloc),
+    MemoryHostTotal:   float64(v.Total),
+    MemoryHostFree:    float64(v.Free),
+    MemoryHostUsedPct: v.UsedPercent,
+    CpuPercentHost:    c[0],
+    LastUpdated:       time.Now(),
+    WarnCount:         warnCount,
+    ErrorCount:        errorCount,
    }
 
    jsonData, err := json.Marshal(nodeInfo)

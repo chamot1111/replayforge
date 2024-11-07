@@ -558,7 +558,7 @@ func startNodeInfoReporting() {
 
    v, _ := mem.VirtualMemory()
    c, _ := cpu.Percent(time.Second, false)
-
+   warnCount, errorCount := logger.GetLogStats()
    nodeInfo := struct {
     MemoryProcess      float64   `json:"memoryProcess"`
     MemoryHostTotal    float64   `json:"memoryHostTotal"`
@@ -566,6 +566,8 @@ func startNodeInfoReporting() {
     MemoryHostUsedPct  float64   `json:"memoryHostUsedPct"`
     CpuPercentHost     float64   `json:"cpuPercentHost"`
     LastUpdated        time.Time `json:"lastUpdated"`
+    WarnCount         int64       `json:"warnCount"`
+    ErrorCount        int64       `json:"errorCount"`
    }{
     MemoryProcess:     float64(memStats.Alloc),
     MemoryHostTotal:   float64(v.Total),
@@ -573,6 +575,8 @@ func startNodeInfoReporting() {
     MemoryHostUsedPct: v.UsedPercent,
     CpuPercentHost:    c[0],
     LastUpdated:       time.Now(),
+    WarnCount:         warnCount,
+    ErrorCount:        errorCount,
    }
 
    jsonData, err := json.Marshal(nodeInfo)

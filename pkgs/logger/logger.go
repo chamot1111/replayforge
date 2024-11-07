@@ -30,6 +30,8 @@ var (
 	mu             sync.Mutex
 	logger         *log.Logger
 	logHistory     map[LogLevel][]logEntry
+	warnCount      int64
+	errorCount     int64
 )
 
 // Configuration structure
@@ -86,10 +88,18 @@ func Configure(config Config) {
 	logger = log.New(output, "", 0)
 }
 
+// GetLogStats returns the count of warnings and errors
+func GetLogStats() (int64, int64) {
+	mu.Lock()
+	defer mu.Unlock()
+	return warnCount, errorCount
+}
+
 // SetLogLevel permet de changer le niveau de log dynamiquement
 func SetLogLevel(level string) {
 	Configure(Config{Level: level})
 }
+
 func shouldLog(level LogLevel, msg string) bool {
 	mu.Lock()
 	defer mu.Unlock()
@@ -129,6 +139,13 @@ func logMsg(level LogLevel, format string, v ...interface{}) {
 
 		mu.Lock()
 		defer mu.Unlock()
+
+		// Increment counters
+		if level == LogLevelWarn {
+			warnCount++
+		} else if level == LogLevelError {
+			errorCount++
+		}
 
 		var levelStr string
 		switch level {
