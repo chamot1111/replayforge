@@ -53,6 +53,7 @@ type BucketStats struct {
 	Kind                string    `json:"kind"`
 	ID                  string    `json:"id"`
 	RxMessagesByMinute  int       `json:"rxMessagesByMinute"`
+	LastMinuteRxMessages int      `json:"lastMinuteRxMessages"`
 	RxMessagesSinceStart int      `json:"rxMessagesSinceStart"`
 	RxLastMessageDate   time.Time `json:"rxLastMessageDate"`
 	RxQueryByMinute     int       `json:"rxQueryByMinute"`
@@ -73,6 +74,8 @@ var bucketStats = make(map[string]*BucketStats)
 var envStats = make(map[string]*BucketStats)
 var hostnameStats = make(map[string]*BucketStats)
 
+var statsResetTicker = time.NewTicker(time.Minute)
+
 func init() {
 	logLevel := os.Getenv("LOG_LEVEL")
 	if logLevel != "" {
@@ -84,6 +87,35 @@ func init() {
 	flag.StringVar(&configPath, "c", "", "Path to config file")
 	flag.IntVar(&port, "p", 8081, "Port to listen on")
 	flag.Parse()
+
+	// Start goroutine to reset per-minute stats
+	go func() {
+		for range statsResetTicker.C {
+			statsMutex.Lock()
+			for _, stats := range bucketStats {
+				stats.LastMinuteRxMessages = stats.RxMessagesByMinute
+				stats.RxMessagesByMinute = 0
+				stats.RxQueryByMinute = 0
+				stats.TxMessageByMinute = 0
+				stats.TxQueryByMinute = 0
+			}
+			for _, stats := range envStats {
+				stats.LastMinuteRxMessages = stats.RxMessagesByMinute
+				stats.RxMessagesByMinute = 0
+				stats.RxQueryByMinute = 0
+				stats.TxMessageByMinute = 0
+				stats.TxQueryByMinute = 0
+			}
+			for _, stats := range hostnameStats {
+				stats.LastMinuteRxMessages = stats.RxMessagesByMinute
+				stats.RxMessagesByMinute = 0
+				stats.RxQueryByMinute = 0
+				stats.TxMessageByMinute = 0
+				stats.TxQueryByMinute = 0
+			}
+			statsMutex.Unlock()
+		}
+	}()
 }
 
 func handleNodeInfo(w http.ResponseWriter, r *http.Request) {

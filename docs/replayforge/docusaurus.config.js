@@ -22,6 +22,7 @@ const config = {
   // If you aren't using GitHub pages, you don't need these.
   organizationName: 'chamot1111', // Usually your GitHub org/user name.
   projectName: 'replayforge', // Usually your repo name.
+  trailingSlash: false,
 
   onBrokenLinks: 'throw',
   onBrokenMarkdownLinks: 'warn',
