@@ -1,0 +1,1 @@
+"use strict";(self.webpackChunkreplayforge=self.webpackChunkreplayforge||[]).push([[1903],{1912:e=>{e.exports=JSON.parse('{"blogBasePath":"/replayforge/blog","blogTitle":"Blog","authorsListPath":"/replayforge/blog/authors"}')}}]);
