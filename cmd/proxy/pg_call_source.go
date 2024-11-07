@@ -95,6 +95,7 @@ func (h *PgCallSource) executeCalls() error {
         Success bool                     `json:"success"`
         Error   string                   `json:"error,omitempty"`
         Data    []map[string]interface{} `json:"data,omitempty"`
+        UpdateTime time.Time             `json:"update_time,omitempty"`
     }
 
     results := make(map[string]interface{})
@@ -137,6 +138,7 @@ func (h *PgCallSource) executeCalls() error {
         rows.Close()
 
         queryResult.Data = result
+        queryResult.UpdateTime = time.Now()
         results[call.Name] = queryResult
     }
 
