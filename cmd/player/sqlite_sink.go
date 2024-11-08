@@ -91,9 +91,6 @@ func (s *SqliteSink) Start() error {
 }
 
 func (s *SqliteSink) Execute(method, path string, body []byte, headers map[string]interface{}, params map[string]interface{}, sinkChannels map[string]chan string) error {
-	if !strings.HasPrefix(path, "/rpf-db") {
-		return nil
-	}
 	table := strings.TrimPrefix(path, "/rpf-db/")
 	err := s.ensureTableExists(table)
 	if err != nil {
