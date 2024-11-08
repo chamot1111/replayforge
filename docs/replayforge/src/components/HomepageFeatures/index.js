@@ -8,8 +8,9 @@ const FeatureList = [
     Svg: require('@site/static/img/undraw_docusaurus_mountain.svg').default,
     description: (
       <>
-        Docusaurus was designed from the ground up to be easily installed and
-        used to get your website up and running quickly.
+        Built for resilience from day one, ReplayForge embraces graceful data loss
+        and rapid recovery, ensuring your data flows keep running even through
+        restarts and errors.
       </>
     ),
   },
@@ -18,21 +19,12 @@ const FeatureList = [
     Svg: require('@site/static/img/undraw_docusaurus_tree.svg').default,
     description: (
       <>
-        Docusaurus lets you focus on your docs, and we&apos;ll do the chores. Go
-        ahead and move your docs into the <code>docs</code> directory.
+        Built as simple Golang binaries with Tailscale integration for secure networking,
+        ReplayForge requires minimal setup with no external databases. Focus on your
+        application while we handle the infrastructure.
       </>
     ),
-  },
-  {
-    title: 'Powered by React',
-    Svg: require('@site/static/img/undraw_docusaurus_react.svg').default,
-    description: (
-      <>
-        Extend or customize your website layout by reusing React. Docusaurus can
-        be extended while reusing the same header and footer.
-      </>
-    ),
-  },
+  }
 ];
 
 function Feature({Svg, title, description}) {
