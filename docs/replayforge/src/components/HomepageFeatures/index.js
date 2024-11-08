@@ -15,16 +15,26 @@ const FeatureList = [
     ),
   },
   {
-    title: 'Focus on What Matters',
+    title: 'Access Off-Cloud Data',
     Svg: require('@site/static/img/undraw_docusaurus_tree.svg').default,
     description: (
       <>
-        Built as simple Golang binaries with Tailscale integration for secure networking,
-        ReplayForge requires minimal setup with no external databases. Focus on your
-        application while we handle the infrastructure.
+        ReplayForge enables secure access to asynchronous data sources outside your cloud
+        infrastructure, allowing you to seamlessly integrate with remote or on-premise systems.
       </>
     ),
-  }
+  },
+  {
+    title: 'Tailscale networking',
+    Svg: require('@site/static/img/undraw_docusaurus_react.svg').default,
+    description: (
+      <>
+        Built as simple Golang binaries with Tailscale support for secure networking,
+        allowing you to host relay servers on machines outside the cloud while maintaining
+        secure encrypted communication between components.
+      </>
+    ),
+  },
 ];
 
 function Feature({Svg, title, description}) {
