@@ -1,6 +1,6 @@
 # ReplayForge
 
-[doc](https://chamot1111.github.io/replayforge/)
+Find complete documentation at [ReplayForge Documentation](https://chamot1111.github.io/replayforge/)
 
 Sometimes you want to extract data from a server in a simple way, even if this simplicity means accepting some data loss. ReplayForge's core concept is to have a proxy program on the server that captures HTTP requests. These requests are then asynchronously relayed to another machine running a "player" program that can replay these same requests.
 
