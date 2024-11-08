@@ -2,7 +2,17 @@
 
 [doc](https://chamot1111.github.io/replayforge/)
 
-ReplayForge is an innovative fault-tolerant queuing system that acts as a distributed database for data flows. Important note: it should only be used for data that can tolerate loss, such as logs. Its unique architecture allows it to gracefully handle data loss and continue operating even when any of its three core components (proxy, relay, or player) experience interruptions or failures. The system ingests data from multiple sources including HTTP requests and log files, while providing output to various destinations such as HTTP clients, SQLite databases, and log files.
+Sometimes you want to extract data from a server in a simple way, even if this simplicity means accepting some data loss. ReplayForge's core concept is to have a proxy program on the server that captures HTTP requests. These requests are then asynchronously relayed to another machine running a "player" program that can replay these same requests.
+
+To achieve this, a relay is installed either on an internet-exposed server via HTTP, or on any machine that doesn't need internet exposure but is accessible through a private Tailscale network.
+
+To ensure maximum system resilience, the proxy has a buffer that allows it to wait if the relay server is unavailable. To avoid unpleasant surprises, both the proxy buffers and relay databases have size limits to prevent accidental disk filling, transfers between proxy and relay are rate-limited, and ReplayForge logs are filtered to emit only small quantities of data.
+
+Additionally, since proxies can be deployed across numerous systems, the relay server provides a locally accessible endpoint that displays statistics for all connected systems. This makes it easy to understand what's happening across all machines and the interactions between them.
+
+While this is the basic idea, ReplayForge goes further. The proxy has been expanded to support additional data sources like files, commands, and PostgreSQL functions. The player has also been enhanced with additional output options like files, Discord notifications, and SQLite databases.
+
+Furthermore, Lua scripts provide complete flexibility for filtering and transforming information as needed.
 
 ## Components
 
@@ -36,36 +46,6 @@ Key features:
 - Provides a simple HTTP API for querying stored requests
 - Supports custom lua processing
 - Supports basic authentication for secure access
-
-## Setup and Configuration
-
-Configure each component using configuration files. Refer to the usage section of each component for details.
-
-## Usage
-
-### Proxy Server
-
-```
-./proxy -c config.json
-```
-
-### Relay Server
-
-```
-./relay -c config.json
-```
-
-### Player Server
-
-```
-./player -c config.json
-```
-
-Refer to the comments in each component's source code for detailed configuration options.
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## License
 
