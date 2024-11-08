@@ -98,7 +98,8 @@ function Process(content, emit)
         local new_body = {
             id = key,
             success = value.success,
-            data = json_encode(value.data)  -- Convert data array back to string
+            data = json_encode(value.data),  -- Convert data array back to string
+            update_time = value.update_time
         }
 
         -- Create the wrapped object
