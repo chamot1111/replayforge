@@ -1,5 +1,7 @@
 # ReplayForge
 
+[doc](https://chamot1111.github.io/replayforge/)
+
 ReplayForge is an innovative fault-tolerant queuing system that acts as a distributed database for data flows. Important note: it should only be used for data that can tolerate loss, such as logs. Its unique architecture allows it to gracefully handle data loss and continue operating even when any of its three core components (proxy, relay, or player) experience interruptions or failures. The system ingests data from multiple sources including HTTP requests and log files, while providing output to various destinations such as HTTP clients, SQLite databases, and log files.
 
 ## Components
