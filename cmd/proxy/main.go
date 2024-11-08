@@ -9,20 +9,20 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
-	"runtime"
 
 	"github.com/Shopify/go-lua"
-	_ "github.com/mattn/go-sqlite3"
 	"github.com/chamot1111/replayforge/internal/envparser"
+	_ "github.com/mattn/go-sqlite3"
 	"tailscale.com/tsnet"
 
-	"github.com/chamot1111/replayforge/pkgs/lualibs"
 	"github.com/chamot1111/replayforge/pkgs/logger"
-	"github.com/shirou/gopsutil/v4/mem"
+	"github.com/chamot1111/replayforge/pkgs/lualibs"
 	"github.com/shirou/gopsutil/v4/cpu"
+	"github.com/shirou/gopsutil/v4/mem"
 )
 const (
 	relayURLSpecialValue = ":dbg>stdout:"
@@ -53,7 +53,7 @@ const (
 `
 )
 var (
-	sinkBackoffDelays = make(map[string]time.Duration)
+	sinkBackoffDelays sync.Map
 	maxBackoffDelay = 300 * time.Second
 	initialBackoffDelay = 100 * time.Millisecond
 	defaultRateLimit = 600 // Default rate limit of 6000 messages per minute
@@ -250,7 +250,7 @@ func init() {
 	}
 
 	for i := range config.Sinks {
-		sinkBackoffDelays[config.Sinks[i].ID] = initialBackoffDelay
+		sinkBackoffDelays.Store(config.Sinks[i].ID, initialBackoffDelay)
 	}
 
 	if config.TsnetHostname != "" {
@@ -646,80 +646,80 @@ func timerHandler(sourceID string) {
 }
 
 func startNodeInfoReporting() {
- go func() {
-  for {
-   var memStats runtime.MemStats
-   runtime.ReadMemStats(&memStats)
+	go func() {
+		for {
+			var memStats runtime.MemStats
+			runtime.ReadMemStats(&memStats)
 
-   v, _ := mem.VirtualMemory()
-   c, _ := cpu.Percent(time.Second, false)
-   warnCount, errorCount := logger.GetLogStats()
-   nodeInfo := struct {
-    MemoryProcess      float64   `json:"memoryProcess"`
-    MemoryHostTotal    float64   `json:"memoryHostTotal"`
-    MemoryHostFree     float64   `json:"memoryHostFree"`
-    MemoryHostUsedPct  float64   `json:"memoryHostUsedPct"`
-    CpuPercentHost     float64   `json:"cpuPercentHost"`
-    LastUpdated        time.Time `json:"lastUpdated"`
-    WarnCount         int64       `json:"warnCount"`
-    ErrorCount        int64       `json:"errorCount"`
-   }{
-    MemoryProcess:     float64(memStats.Alloc),
-    MemoryHostTotal:   float64(v.Total),
-    MemoryHostFree:    float64(v.Free),
-    MemoryHostUsedPct: v.UsedPercent,
-    CpuPercentHost:    c[0],
-    LastUpdated:       time.Now(),
-    WarnCount:         warnCount,
-    ErrorCount:        errorCount,
-   }
+			v, _ := mem.VirtualMemory()
+			c, _ := cpu.Percent(time.Second, false)
+			warnCount, errorCount := logger.GetLogStats()
+			nodeInfo := struct {
+				MemoryProcess      float64   `json:"memoryProcess"`
+				MemoryHostTotal    float64   `json:"memoryHostTotal"`
+				MemoryHostFree     float64   `json:"memoryHostFree"`
+				MemoryHostUsedPct  float64   `json:"memoryHostUsedPct"`
+				CpuPercentHost     float64   `json:"cpuPercentHost"`
+				LastUpdated        time.Time `json:"lastUpdated"`
+				WarnCount         int64       `json:"warnCount"`
+				ErrorCount        int64       `json:"errorCount"`
+			}{
+				MemoryProcess:     float64(memStats.Alloc),
+				MemoryHostTotal:   float64(v.Total),
+				MemoryHostFree:    float64(v.Free),
+				MemoryHostUsedPct: v.UsedPercent,
+				CpuPercentHost:    c[0],
+				LastUpdated:       time.Now(),
+				WarnCount:         warnCount,
+				ErrorCount:        errorCount,
+			}
 
-   jsonData, err := json.Marshal(nodeInfo)
-   if err != nil {
-    logger.Error("Failed to marshal node info: %v", err)
-    continue
-   }
-   // Keep track of URLs we've already sent to
-   sentUrls := make(map[string]bool)
+			jsonData, err := json.Marshal(nodeInfo)
+			if err != nil {
+				logger.Error("Failed to marshal node info: %v", err)
+				continue
+			}
+			// Keep track of URLs we've already sent to
+			sentUrls := make(map[string]bool)
 
-   for _, sink := range config.Sinks {
-    // Skip if we've already sent to this URL
-    if sentUrls[sink.URL] {
-      continue
-    }
-    sentUrls[sink.URL] = true
+			for _, sink := range config.Sinks {
+				// Skip if we've already sent to this URL
+				if sentUrls[sink.URL] {
+						continue
+				}
+				sentUrls[sink.URL] = true
 
-    var client *http.Client
-    if sink.UseTsnet && tsnetServer != nil {
-     client = tsnetServer.HTTPClient()
-    } else {
-     client = &http.Client{
-      Timeout: time.Second,
-     }
-    }
+				var client *http.Client
+				if sink.UseTsnet && tsnetServer != nil {
+					client = tsnetServer.HTTPClient()
+				} else {
+					client = &http.Client{
+						Timeout: time.Second,
+					}
+				}
 
-    req, err := http.NewRequest("POST", sink.URL+"node-info", bytes.NewBuffer(jsonData))
-    if err != nil {
-     logger.Error("Failed to create node info request: %v", err)
-     continue
-    }
+				req, err := http.NewRequest("POST", sink.URL+"node-info", bytes.NewBuffer(jsonData))
+				if err != nil {
+					logger.Error("Failed to create node info request: %v", err)
+					continue
+				}
 
-    req.Header.Set("Content-Type", "application/json")
-    if sink.AuthBearer != "" {
-      req.Header.Set("Authorization", "Bearer "+sink.AuthBearer)
-    }
+				req.Header.Set("Content-Type", "application/json")
+				if sink.AuthBearer != "" {
+						req.Header.Set("Authorization", "Bearer "+sink.AuthBearer)
+				}
 
-    resp, err := client.Do(req)
-    if err != nil {
-     logger.Error("Failed to send node info: %v", err)
-     continue
-    }
-    resp.Body.Close()
-   }
+				resp, err := client.Do(req)
+				if err != nil {
+					logger.Error("Failed to send node info: %v", err)
+					continue
+				}
+				resp.Body.Close()
+			}
 
-   time.Sleep(time.Minute)
-  }
- }()
+			time.Sleep(time.Minute)
+		}
+	}()
 }
 
 func main() {
@@ -803,13 +803,15 @@ func main() {
 			for {
 				err := sinkDbToRelayServer(s)
 				if err != nil {
-					sinkBackoffDelays[s.ID] = time.Duration(float64(sinkBackoffDelays[s.ID]) * 2)
-					if sinkBackoffDelays[s.ID] > maxBackoffDelay {
-						sinkBackoffDelays[s.ID] = maxBackoffDelay
+					currentDelay, _ := sinkBackoffDelays.Load(s.ID)
+					newDelay := time.Duration(float64(currentDelay.(time.Duration)) * 2)
+					if newDelay > maxBackoffDelay {
+						newDelay = maxBackoffDelay
 					}
-					time.Sleep(sinkBackoffDelays[s.ID])
+					sinkBackoffDelays.Store(s.ID, newDelay)
+					time.Sleep(newDelay)
 				} else {
-					sinkBackoffDelays[s.ID] = initialBackoffDelay
+					sinkBackoffDelays.Store(s.ID, initialBackoffDelay)
 					time.Sleep(time.Duration(heartbeatIntervalMs) * time.Millisecond)
 				}
 			}
