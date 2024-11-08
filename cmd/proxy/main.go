@@ -37,7 +37,7 @@ const (
 									"interval": 10000
 							},
 							"transformScript": "${script_path}",
-							"hookInterval": 1000
+							"hookInterval": "1s"
 					}
 			],
 			"sinks": [
@@ -64,7 +64,24 @@ type BaseSource struct {
 	Type            string `json:"type"`
 	TransformScript string `json:"transformScript"`
 	TargetSink      string `json:"targetSink"`
-	HookInterval    int    `json:"hookInterval"`
+	HookInterval    interface{} `json:"hookInterval"` // Can be string or int
+}
+
+func (bs *BaseSource) GetHookInterval() time.Duration {
+	switch v := bs.HookInterval.(type) {
+	case string:
+		if d, err := time.ParseDuration(v); err == nil {
+			return d
+		}
+		logger.Error("Invalid duration string for HookInterval: %s", v)
+		return 0
+	case float64:
+		return time.Duration(v) * time.Second
+	case int:
+		return time.Duration(v) * time.Second
+	default:
+		return 0
+	}
 }
 
 type SourceConfig struct {
@@ -826,7 +843,11 @@ func main() {
 			go func(s SourceConfig) {
 				for {
 					timerHandler(s.ID)
-					time.Sleep(time.Duration(s.HookInterval) * time.Second)
+					hookInterval := s.GetHookInterval()
+					if hookInterval <= 0 {
+						hookInterval = time.Second
+					}
+					time.Sleep(hookInterval)
 				}
 			}(sourceConfig)
 		}

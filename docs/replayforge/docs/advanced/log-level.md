@@ -10,3 +10,9 @@ The log level is a way to control the verbosity of the logs. The log level can b
 - `info`: The default log level. It is used to log information about the application.
 - `warn`: It is used to log warnings.
 - `error`: It is used to log errors.
+
+By default, the log level is set to `info`.
+
+:::warning
+As replay forge is a tools to manage logs, it will not flood itself with logs. Before logging there is a filter that prevents sending the same message multiple times within a 30 second window.
+:::
