@@ -74,10 +74,15 @@ func (l *LogFileSource) readLogFile() {
 	}
 	defer file.Close()
 
-	checksum, err := l.calculateChecksum(file)
+	checksum, enoughLines, err := l.calculateChecksum(file)
 	if err != nil {
 		logger.Error("Failed to calculate checksum for %s: %v", l.FilePath, err)
 		time.Sleep(time.Duration(l.HookInterval) * time.Millisecond)
+		return
+	}
+
+	if !enoughLines {
+		logger.Debug("Not enough lines to calculate checksum for %s", l.FilePath)
 		return
 	}
 
@@ -160,7 +165,7 @@ func (l *LogFileSource) readLogFile() {
 	}
 }
 
-func (l *LogFileSource) calculateChecksum(file *os.File) (string, error) {
+func (l *LogFileSource) calculateChecksum(file *os.File) (string, bool, error) {
 	hash := md5.New()
 	scanner := bufio.NewScanner(file)
 	lineCount := 0
@@ -168,14 +173,14 @@ func (l *LogFileSource) calculateChecksum(file *os.File) (string, error) {
 	for scanner.Scan() && lineCount < int(l.FingerprintLines) {
 		_, err := io.WriteString(hash, scanner.Text())
 		if err != nil {
-			return "", err
+			return "", false, err
 		}
 		lineCount++
 	}
 
 	if lineCount < int(l.FingerprintLines) {
-		return "", fmt.Errorf("file has less than %d lines", l.FingerprintLines)
+		return "", false, fmt.Errorf("file has less than %d lines", l.FingerprintLines)
 	}
 
-	return fmt.Sprintf("%x", hash.Sum(nil)), nil
+	return fmt.Sprintf("%x", hash.Sum(nil)), true, nil
 }
