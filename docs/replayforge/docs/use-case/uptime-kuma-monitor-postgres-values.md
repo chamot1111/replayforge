@@ -75,7 +75,8 @@ player.json:
       "params": {
         "database": "./status.sqlite3",
         "listen_port": "8300",
-        "static_dir": "./static"
+        "static_dir": "./static",
+        "row_ttl_sec": 60
       }
     }
   ]

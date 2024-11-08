@@ -138,8 +138,24 @@ func (s *SqliteSink) ttlCleanup() {
 	}
 }
 
+func isValidTableName(table string) bool {
+	for _, c := range table {
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-') {
+			return false
+		}
+	}
+	return true
+}
+
 func (s *SqliteSink) Execute(method, path string, body []byte, headers map[string]interface{}, params map[string]interface{}, sinkChannels map[string]chan string) error {
 	table := strings.TrimPrefix(path, "/rpf-db/")
+	table = strings.TrimPrefix(table, "/")
+
+	// Ensure table name is compatible with SQL by allowing only alphanumeric characters, underscore and dash
+	if !isValidTableName(table) {
+		return fmt.Errorf("invalid table name: %s - only alphanumeric characters, underscore and dash are allowed", table)
+	}
+
 	err := s.ensureTableExists(table)
 	if err != nil {
 		return err
