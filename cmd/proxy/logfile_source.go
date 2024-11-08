@@ -20,7 +20,8 @@ type LogFileSource struct {
 	lastPosition     int64
 	HttpPath         string
 	lastTruncate     time.Time
-	lastChecksum       string
+	lastChecksum     string
+	hookInterval     time.Duration
 }
 
 func (l *LogFileSource) Init(config SourceConfig, eventChan chan<- EventSource) error {
@@ -43,6 +44,10 @@ func (l *LogFileSource) Init(config SourceConfig, eventChan chan<- EventSource) 
 		l.HttpPath = "/"
 	}
 	l.lastTruncate = time.Now()
+	l.hookInterval = l.BaseSource.GetHookInterval()
+	if l.hookInterval <= 0 {
+		return fmt.Errorf("hook interval must be greater than 0")
+	}
 	return nil
 }
 
@@ -51,7 +56,7 @@ func (l *LogFileSource) Start() error {
 	go func() {
 		for {
 			l.readLogFile()
-			time.Sleep(time.Duration(l.HookInterval) * time.Millisecond)
+			time.Sleep(l.hookInterval)
 		}
 	}()
 	return nil
@@ -65,11 +70,11 @@ func (l *LogFileSource) readLogFile() {
 	file, err := os.Open(l.FilePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			time.Sleep(time.Duration(l.HookInterval) * time.Millisecond)
+			time.Sleep(l.hookInterval)
 			return
 		}
 		logger.Error("Failed to open log file %s: %v", l.FilePath, err)
-		time.Sleep(time.Duration(l.HookInterval) * time.Millisecond)
+		time.Sleep(l.hookInterval)
 		return
 	}
 	defer file.Close()
@@ -77,7 +82,7 @@ func (l *LogFileSource) readLogFile() {
 	checksum, enoughLines, err := l.calculateChecksum(file)
 	if err != nil {
 		logger.Error("Failed to calculate checksum for %s: %v", l.FilePath, err)
-		time.Sleep(time.Duration(l.HookInterval) * time.Millisecond)
+		time.Sleep(l.hookInterval)
 		return
 	}
 

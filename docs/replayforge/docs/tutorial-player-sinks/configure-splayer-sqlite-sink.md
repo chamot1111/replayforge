@@ -14,7 +14,8 @@ To use the SQLite Sink plugin, you need to configure it with the following param
   "database": "/path/to/your/database.db",
   "listen_port": "8080",
   "listen_host": "localhost",
-  "static_dir": "/path/to/static/files"
+  "static_dir": "/path/to/static/files",
+  "row_ttl_sec": 3600 // optional, default is 0. Deletes rows older than this value.
 }
 ```
 
