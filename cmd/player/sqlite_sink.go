@@ -5,14 +5,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strings"
 	"strconv"
-	"github.com/chamot1111/replayforge/pkgs/playerplugin"
+	"strings"
+	"time"
+
 	"github.com/chamot1111/replayforge/pkgs/logger"
+	"github.com/chamot1111/replayforge/pkgs/playerplugin"
 
 	_ "github.com/mattn/go-sqlite3"
 )
-
 type SqliteSink struct {
 	DB           *sql.DB
 	TableSchemas map[string]map[string]string
@@ -20,6 +21,8 @@ type SqliteSink struct {
 	StaticDir    string
 	ID           string
 	ExposedPort  int
+	RowTTLSec    int64
+	DBPath       string
 }
 
 func (s *SqliteSink) Init(config playerplugin.SinkConfig) error {
@@ -30,10 +33,17 @@ func (s *SqliteSink) Init(config playerplugin.SinkConfig) error {
 		return fmt.Errorf("failed to parse params: %v", err)
 	}
 
+	if ttl, ok := params["row_ttl_sec"].(float64); ok {
+		s.RowTTLSec = int64(ttl)
+	}
+
 	dbPath, ok := params["database"].(string)
 	if !ok {
 		return fmt.Errorf("database path not found in params or not a string")
 	}
+
+	dbPathWithQuery := dbPath + "?_auto_vacuum=1&_journal_mode=WAL&_synchronous=NORMAL"
+	s.DBPath = dbPathWithQuery
 
 	listenPort, ok := params["listen_port"].(string)
 	if !ok {
@@ -58,7 +68,7 @@ func (s *SqliteSink) Init(config playerplugin.SinkConfig) error {
 		s.StaticDir = "" // Make static_dir optional by using empty string as default
 	}
 
-	db, err := sql.Open("sqlite3", dbPath+"?_auto_vacuum=1&_journal_mode=WAL&_synchronous=NORMAL")
+	db, err := sql.Open("sqlite3", s.DBPath)
 	if err != nil {
 		return fmt.Errorf("failed to open database: %v", err)
 	}
@@ -66,6 +76,20 @@ func (s *SqliteSink) Init(config playerplugin.SinkConfig) error {
 	s.ID = config.ID
 	s.TableSchemas = make(map[string]map[string]string)
 	s.loadTableSchemas()
+
+	// Add _rpf_last_updated_idx column to all tables and create index
+	for table := range s.TableSchemas {
+		err = s.ensureColumnExists(table, "_rpf_last_updated_idx", "INTEGER")
+		if err != nil {
+			return fmt.Errorf("failed to add _rpf_last_updated_idx column: %v", err)
+		}
+	}
+
+	// Start TTL cleanup goroutine if TTL is set
+	if s.RowTTLSec > 0 {
+		go s.ttlCleanup()
+	}
+
 	return nil
 }
 
@@ -88,6 +112,30 @@ func (s *SqliteSink) Start() error {
 		}
 	}()
 	return nil
+}
+
+func (s *SqliteSink) ttlCleanup() {
+	ticker := time.NewTicker(time.Duration(s.RowTTLSec) * time.Second)
+	for range ticker.C {
+		// Open a new DB connection for this goroutine
+		db, err := sql.Open("sqlite3", s.DBPath)
+		if err != nil {
+			logger.Error("Failed to open DB connection for TTL cleanup: %v", err)
+			continue
+		}
+
+		now := time.Now().Unix()
+		for table := range s.TableSchemas {
+			query := fmt.Sprintf("DELETE FROM %s WHERE _rpf_last_updated_idx < ?", table)
+			expiryTime := now - s.RowTTLSec
+			_, err := db.Exec(query, expiryTime)
+			if err != nil {
+				logger.Error("Failed to cleanup expired rows: %v", err)
+			}
+		}
+
+		db.Close()
+	}
 }
 
 func (s *SqliteSink) Execute(method, path string, body []byte, headers map[string]interface{}, params map[string]interface{}, sinkChannels map[string]chan string) error {
@@ -122,6 +170,12 @@ func (s *SqliteSink) ensureTableExists(table string) error {
 		}
 		s.TableSchemas[table] = make(map[string]string)
 		s.TableSchemas[table]["id"] = "TEXT"
+
+		err = s.ensureColumnExists(table, "_rpf_last_updated_idx", "INTEGER")
+		if err != nil {
+			return fmt.Errorf("failed to add _rpf_last_updated_idx column: %v", err)
+		}
+
 	}
 	return nil
 }
@@ -134,6 +188,16 @@ func (s *SqliteSink) ensureColumnExists(table, column, dataType string) error {
 			return fmt.Errorf("failed to add column %s to table %s: %v", column, table, err)
 		}
 		s.TableSchemas[table][column] = dataType
+
+		// Create index if column name ends with idx, index or id
+		if strings.HasSuffix(column, "idx") || strings.HasSuffix(column, "index") || strings.HasSuffix(column, "id") {
+			indexQuery := fmt.Sprintf("CREATE INDEX IF NOT EXISTS idx_%s_%s ON %s(%s)",
+				table, column, table, column)
+			_, err = s.DB.Exec(indexQuery)
+			if err != nil {
+				return fmt.Errorf("failed to create index on column %s: %v", column, err)
+			}
+		}
 	}
 	return nil
 }
@@ -148,6 +212,8 @@ func (s *SqliteSink) handlePost(table string, body []byte) error {
 	if _, ok := data["id"]; !ok {
 		return fmt.Errorf("id is mandatory")
 	}
+
+	data["_rpf_last_updated_idx"] = time.Now().Unix()
 
 	columns := make([]string, 0, len(data))
 	values := make([]interface{}, 0, len(data))
@@ -191,6 +257,9 @@ func (s *SqliteSink) handlePut(table string, body []byte) error {
 	if !ok {
 		return fmt.Errorf("id is required for update")
 	}
+
+	data["_rpf_last_updated_idx"] = time.Now().Unix()
+
 	delete(data, "id")
 	setStatements := make([]string, 0, len(data))
 	values := make([]interface{}, 0, len(data)+1)
