@@ -13,8 +13,8 @@ import (
 
 	"github.com/Shopify/go-lua"
 	"github.com/chamot1111/replayforge/pkgs/logger"
-	"tailscale.com/tsnet"
 	"github.com/chamot1111/replayforge/pkgs/lualibs"
+	"tailscale.com/tsnet"
 )
 
 const (
@@ -59,7 +59,6 @@ func NewSinkVM(script string) *SinkVM {
 	}
 }
 
-
 func sinkDbToRelayServer(sink Sink) error {
 	if _, err := os.Stat(sink.DatabasePath); os.IsNotExist(err) {
 		logger.Info("Database file does not exist: %s", sink.DatabasePath)
@@ -70,8 +69,8 @@ func sinkDbToRelayServer(sink Sink) error {
 		return nil
 	}
 
-	sinkDB, err, _ := setupSql(sink.DatabasePath, false)
-	if err != nil {
+	sinkDB, err, isErrDbSize := setupSql(sink.DatabasePath, false)
+	if err != nil && !isErrDbSize {
 		logger.Error("Failed to open sink database: %v", err)
 		return err
 	}
@@ -156,7 +155,6 @@ func sinkDbToRelayServer(sink Sink) error {
 	return nil
 }
 
-
 func sendBatchContent(sink *Sink, contents []string, client *http.Client) error {
 	if sink.URL == relayURLSpecialValue {
 		for _, content := range contents {
@@ -223,7 +221,6 @@ func sendBatchContent(sink *Sink, contents []string, client *http.Client) error 
 
 	return nil
 }
-
 
 func getRateLimiter(sinkID string, maxPerMinute int) *RateLimiter {
 	rateLimitersMutex.Lock()
@@ -307,8 +304,6 @@ func (s *Sink) GetBatchTimeoutSecs() int {
 	}
 	return batchDefaultTimeoutSecs
 }
-
-
 
 func transformSinkContent(sink *Sink, contents []string) (*SinkTransformResult, error) {
 	if sink.TransformScript == "" {
@@ -405,7 +400,6 @@ func transformSinkContent(sink *Sink, contents []string) (*SinkTransformResult, 
 	return result, nil
 }
 
-
 type SinkTransformResult struct {
 	Messages []string
 	Request  struct {
@@ -413,8 +407,6 @@ type SinkTransformResult struct {
 		Headers map[string]string `json:"headers"`
 	}
 }
-
-
 
 func setupSinks() {
 	for i := range config.Sinks {
