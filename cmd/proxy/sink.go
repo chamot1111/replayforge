@@ -58,14 +58,9 @@ func NewSinkVM(script string) *SinkVM {
 		script: script,
 	}
 }
-
 func sinkDbToRelayServer(sink Sink) error {
 	if _, err := os.Stat(sink.DatabasePath); os.IsNotExist(err) {
 		logger.Info("Database file does not exist: %s", sink.DatabasePath)
-		return nil
-	}
-
-	if time.Since(sink.lastBatchTime) < time.Duration(sink.GetBatchTimeoutSecs())*time.Second {
 		return nil
 	}
 
@@ -122,7 +117,8 @@ func sinkDbToRelayServer(sink Sink) error {
 		batchSize += contentBytes
 		idsToDelete = append(idsToDelete, id)
 
-		if len(batchContent) >= maxEvents || batchSize >= goalBytes {
+		if len(batchContent) >= maxEvents || batchSize >= goalBytes ||
+					(len(batchContent) > 0 && time.Since(sink.lastBatchTime) >= time.Duration(sink.GetBatchTimeoutSecs())*time.Second) {
 			if err := sendBatchContent(&sink, batchContent, client); err != nil {
 				logger.Error("Failed to send batch content: %v", err)
 				idsToDelete = idsToDelete[len(batchContent):]
