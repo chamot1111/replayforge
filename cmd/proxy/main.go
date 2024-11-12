@@ -24,9 +24,15 @@ import (
 	"github.com/shirou/gopsutil/v4/cpu"
 	"github.com/shirou/gopsutil/v4/mem"
 )
+
 const (
-	relayURLSpecialValue = ":dbg>stdout:"
-	debugConfig          = `
+	relayURLSpecialValue    = ":dbg>stdout:"
+	maxPayloadBytes         = 5 * 1024 * 1024    // 5MB max
+	batchGoalBytes          = 4.25 * 1024 * 1024 // ~4.25MB
+	batchMaxEvents          = 1000               // 1000 events max
+	batchDefaultTimeoutSecs = 5                  // 5 seconds
+
+	debugConfig = `
 	{
 			"sources": [
 					{
@@ -46,25 +52,34 @@ const (
 							"type": "http",
 							"url": ":dbg>stdout:",
 							"buckets": [],
-							"useTsnet": false
+							"useTsnet": false,
+							"transformScript": ""
 					}
 			]
 	}
 `
 )
+
 var (
-	sinkBackoffDelays sync.Map
-	maxBackoffDelay = 300 * time.Second
+	sinkBackoffDelays   sync.Map
+	maxBackoffDelay     = 300 * time.Second
 	initialBackoffDelay = 100 * time.Millisecond
-	defaultRateLimit = 600 // Default rate limit of 6000 messages per minute
+	defaultRateLimit    = 600
 )
 
 type BaseSource struct {
-	ID              string `json:"id"`
-	Type            string `json:"type"`
-	TransformScript string `json:"transformScript"`
-	TargetSink      string `json:"targetSink"`
-	HookInterval    interface{} `json:"hookInterval"` // Can be string or int
+	ID              string      `json:"id"`
+	Type            string      `json:"type"`
+	TransformScript string      `json:"transformScript"`
+	TargetSink      string      `json:"targetSink"`
+	HookInterval    interface{} `json:"hookInterval"`
+}
+
+type SinkConfig struct {
+	MaxPayloadBytes  int `json:"maxPayloadBytes"`  // Max payload size in bytes
+	BatchGoalBytes   int `json:"batchGoalBytes"`   // Target batch size in bytes
+	BatchMaxEvents   int `json:"batchMaxEvents"`   // Max events per batch
+	BatchTimeoutSecs int `json:"batchTimeoutSecs"` // Batch timeout in seconds
 }
 
 func (bs *BaseSource) GetHookInterval() time.Duration {
@@ -90,10 +105,10 @@ type SourceConfig struct {
 }
 
 type RateLimiter struct {
-	limit         int
-	count         int
-	lastReset     time.Time
-	mutex         sync.Mutex
+	limit     int
+	count     int
+	lastReset time.Time
+	mutex     sync.Mutex
 }
 
 func NewRateLimiter(limit int) *RateLimiter {
@@ -124,15 +139,101 @@ func (r *RateLimiter) Allow() bool {
 var rateLimiters = make(map[string]*RateLimiter)
 var rateLimitersMutex sync.RWMutex
 
+type LuaVM struct {
+	vm       *lua.State
+	useCount int
+	maxUses  int
+	mutex    sync.Mutex
+}
+
+type SinkVM struct {
+	currentVM *LuaVM
+	script    string
+	mutex     sync.Mutex
+}
+
+func NewSinkVM(script string) *SinkVM {
+	return &SinkVM{
+		script: script,
+	}
+}
+
+func (svm *SinkVM) getVM() (*LuaVM, error) {
+	svm.mutex.Lock()
+	defer svm.mutex.Unlock()
+
+	if svm.currentVM == nil || svm.currentVM.useCount >= svm.currentVM.maxUses {
+		if svm.currentVM != nil {
+			// Note: Lua will automatically garbage collect
+			svm.currentVM = nil
+		}
+
+		vm := lua.NewState()
+		lua.OpenLibraries(vm)
+		lualibs.RegisterLuaLibs(vm)
+
+		if err := lua.DoString(vm, svm.script); err != nil {
+			// No need to explicitly close Lua VM as it will be garbage collected
+			return nil, fmt.Errorf("failed to load script: %v", err)
+		}
+
+		svm.currentVM = &LuaVM{
+			vm:       vm,
+			useCount: 0,
+			maxUses:  100,
+		}
+	}
+
+	return svm.currentVM, nil
+}
+
+func (lvm *LuaVM) use() {
+	lvm.mutex.Lock()
+	defer lvm.mutex.Unlock()
+	lvm.useCount++
+}
+
 type Sink struct {
-	ID           string
-	Type         string
-	URL          string
-	AuthBearer   string
-	Buckets      []string
-	DatabasePath string
-	UseTsnet     bool `json:"useTsnet"`
-	MaxMessagesPerMinute int `json:"maxMessagesPerMinute"`
+	ID                   string
+	Type                 string
+	URL                  string
+	AuthBearer           string
+	Buckets              []string
+	DatabasePath         string
+	UseTsnet             bool       `json:"useTsnet"`
+	MaxMessagesPerMinute int        `json:"maxMessagesPerMinute"`
+	TransformScript      string     `json:"transformScript"`
+	Config               SinkConfig `json:"config"`
+	vm                   *SinkVM
+	lastBatchTime        time.Time
+}
+
+func (s *Sink) GetMaxPayloadBytes() int {
+	if s.Config.MaxPayloadBytes > 0 {
+		return s.Config.MaxPayloadBytes
+	}
+	return maxPayloadBytes
+}
+
+func (s *Sink) GetBatchGoalBytes() int {
+	if s.Config.BatchGoalBytes > 0 {
+		return s.Config.BatchGoalBytes
+	}
+	return batchGoalBytes
+}
+
+func (s *Sink) GetBatchMaxEvents() int {
+	if s.Config.BatchMaxEvents > 0 {
+		return s.Config.BatchMaxEvents
+	}
+	return batchMaxEvents
+}
+
+func (s *Sink) GetBatchTimeoutSecs() int {
+	if s.Config.BatchTimeoutSecs > 0 {
+		return s.Config.BatchTimeoutSecs
+	}
+	return batchDefaultTimeoutSecs
 }
 
 type Config struct {
@@ -167,11 +268,19 @@ type SinkStats struct {
 	LastMessageDate    time.Time
 }
 
+type SinkTransformResult struct {
+	Messages []string
+	Request  struct {
+		Path    string            `json:"path"`
+		Headers map[string]string `json:"headers"`
+	}
+}
+
 var (
 	sources             map[string]Source
 	configPath          string
 	heartbeatIntervalMs = 100
-	maxDbSize           = int64(10 * 1024 * 1024) // 10 MB
+	maxDbSize           = int64(10 * 1024 * 1024)
 	config              Config
 	vms                 map[string]*lua.State
 	lastVacuumTimes     map[string]time.Time
@@ -247,6 +356,15 @@ func init() {
 		if sink.URL != relayURLSpecialValue && !strings.HasSuffix(sink.URL, "/") {
 			sink.URL += "/"
 		}
+
+		if sink.TransformScript != "" {
+			script, err := os.ReadFile(sink.TransformScript)
+			if err != nil {
+				logger.Fatal("Failed to read transform script for sink %s: %v", sink.ID, err)
+			}
+			sink.vm = NewSinkVM(string(script))
+		}
+
 		sinkChannels[sink.ID] = make(chan string, 100)
 		db, err, isSpaceError := initSetupSql(sink.DatabasePath, false)
 		if err != nil {
@@ -273,7 +391,6 @@ func init() {
 	if config.TsnetHostname != "" {
 		tsnetServer = &tsnet.Server{Hostname: config.TsnetHostname}
 	} else {
-		// Log warning but continue if a sink uses tsnet without hostname
 		for _, sink := range config.Sinks {
 			if sink.UseTsnet {
 				logger.Error("Sink %s uses tsnet but no tsnetHostname is configured", sink.ID)
@@ -365,7 +482,6 @@ func init() {
 		vms[sourceConfig.ID] = vm
 	}
 
-	// Start goroutine to reset messages per minute
 	go func() {
 		for {
 			time.Sleep(time.Minute)
@@ -505,6 +621,10 @@ func sinkDbToRelayServer(sink Sink) error {
 		return nil
 	}
 
+	if time.Since(sink.lastBatchTime) < time.Duration(sink.GetBatchTimeoutSecs())*time.Second {
+		return nil
+	}
+
 	sinkDB, err, _ := setupSql(sink.DatabasePath, false)
 	if err != nil {
 		logger.Error("Failed to open sink database: %v", err)
@@ -512,8 +632,10 @@ func sinkDbToRelayServer(sink Sink) error {
 	}
 	defer sinkDB.Close()
 
-	// Process sink_events
-	rows, err := sinkDB.Query("SELECT id, content FROM sink_events ORDER BY id ASC LIMIT 1000")
+	maxEvents := sink.GetBatchMaxEvents()
+	goalBytes := sink.GetBatchGoalBytes()
+
+	rows, err := sinkDB.Query(fmt.Sprintf("SELECT id, content FROM sink_events ORDER BY id ASC LIMIT %d", maxEvents))
 	if err != nil {
 		logger.Error("Failed to query sink_events: %v", err)
 		return err
@@ -524,16 +646,17 @@ func sinkDbToRelayServer(sink Sink) error {
 	var batchContent []string
 	var batchSize int
 
-	// Create HTTP client once for the whole function
 	var client *http.Client
 	if sink.UseTsnet && tsnetServer != nil {
 		client = tsnetServer.HTTPClient()
-		client.Timeout = time.Second
+		client.Timeout = time.Duration(sink.GetBatchTimeoutSecs()) * time.Second
 	} else {
 		client = &http.Client{
-			Timeout: time.Second,
+			Timeout: time.Duration(sink.GetBatchTimeoutSecs()) * time.Second,
 		}
 	}
+
+	maxPayload := sink.GetMaxPayloadBytes()
 
 	for rows.Next() {
 		var id int
@@ -545,31 +668,35 @@ func sinkDbToRelayServer(sink Sink) error {
 			continue
 		}
 
+		contentBytes := len(content)
+		if contentBytes+batchSize > maxPayload {
+			logger.Warn("Content size (%d bytes) would exceed max payload size, skipping", contentBytes)
+			continue
+		}
+
 		batchContent = append(batchContent, content)
-		batchSize += len(content)
+		batchSize += contentBytes
 		idsToDelete = append(idsToDelete, id)
 
-		// Send batch if we hit max events or size limit
-		if len(batchContent) >= 10 || batchSize >= 500*1024 {
-			if err := sendBatchContent(sink, batchContent, client); err != nil {
+		if len(batchContent) >= maxEvents || batchSize >= goalBytes {
+			if err := sendBatchContent(&sink, batchContent, client); err != nil {
 				logger.Error("Failed to send batch content: %v", err)
-				// Remove successful IDs from idsToDelete
 				idsToDelete = idsToDelete[len(batchContent):]
 				return err
 			}
 			batchContent = nil
 			batchSize = 0
+			sink.lastBatchTime = time.Now()
 		}
 	}
 
-	// Send any remaining content
 	if len(batchContent) > 0 {
-		if err := sendBatchContent(sink, batchContent, client); err != nil {
+		if err := sendBatchContent(&sink, batchContent, client); err != nil {
 			logger.Error("Failed to send remaining batch content: %v", err)
-			// Remove successful IDs from idsToDelete
 			idsToDelete = idsToDelete[len(batchContent):]
 			return err
 		}
+		sink.lastBatchTime = time.Now()
 	}
 
 	if len(idsToDelete) > 0 {
@@ -584,7 +711,102 @@ func sinkDbToRelayServer(sink Sink) error {
 	return nil
 }
 
-func sendBatchContent(sink Sink, contents []string, client *http.Client) error {
+func transformSinkContent(sink *Sink, contents []string) (*SinkTransformResult, error) {
+	if sink.TransformScript == "" {
+		return &SinkTransformResult{Messages: contents}, nil
+	}
+
+	luaVM, err := sink.vm.getVM()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get Lua VM: %v", err)
+	}
+
+	luaVM.use()
+	vm := luaVM.vm
+
+	result := &SinkTransformResult{
+		Request: struct {
+			Path    string            `json:"path"`
+			Headers map[string]string `json:"headers"`
+		}{
+			Headers: make(map[string]string),
+		},
+	}
+
+	vm.Global("TransformBatch")
+	if !vm.IsFunction(-1) {
+		return nil, fmt.Errorf("TransformBatch function not found in sink script")
+	}
+
+	// Push messages table
+	vm.NewTable()
+	for i, content := range contents {
+		vm.PushInteger(i + 1)
+		vm.PushString(content)
+		vm.SetTable(-3)
+	}
+
+	// Push request table
+	vm.NewTable()
+	vm.PushString("path")
+	vm.PushString("")
+	vm.SetTable(-3)
+	vm.PushString("headers")
+	vm.NewTable()
+	vm.SetTable(-3)
+
+	if err := vm.ProtectedCall(2, 2, 0); err != nil {
+		return nil, fmt.Errorf("failed to run TransformBatch: %v", err)
+	}
+	// Parse request table
+	if vm.IsTable(-1) {
+		// Get headers
+		vm.PushString("headers")
+		vm.RawGet(-2)
+		if vm.IsTable(-1) {
+			vm.PushNil()
+			for vm.Next(-2) {
+				if key, ok := vm.ToString(-2); ok {
+					if value, ok := vm.ToString(-1); ok {
+						result.Request.Headers[key] = value
+					}
+				}
+				vm.Pop(1)
+			}
+		}
+		vm.Pop(1)
+
+		// Get path
+		vm.PushString("path")
+		vm.RawGet(-2)
+		if path, ok := vm.ToString(-1); ok {
+			result.Request.Path = path
+		}
+		vm.Pop(1)
+	}
+	vm.Pop(1)
+
+	// Parse messages table
+	if !vm.IsTable(-1) {
+		return nil, fmt.Errorf("TransformBatch must return messages table and request table")
+	}
+
+	var transformedContents []string
+	vm.PushNil()
+	for vm.Next(-2) {
+		if str, ok := vm.ToString(-1); ok {
+			transformedContents = append(transformedContents, str)
+		}
+		vm.Pop(1)
+	}
+	result.Messages = transformedContents
+
+	vm.Pop(1)
+
+	return result, nil
+}
+
+func sendBatchContent(sink *Sink, contents []string, client *http.Client) error {
 	if sink.URL == relayURLSpecialValue {
 		for _, content := range contents {
 			logger.Debug("Sending content to stdout: %s", content)
@@ -592,7 +814,7 @@ func sendBatchContent(sink Sink, contents []string, client *http.Client) error {
 		return nil
 	}
 
-	maxPerMinute := getSinkMaxMessagesPerMinute(sink)
+	maxPerMinute := getSinkMaxMessagesPerMinute(*sink)
 	if maxPerMinute > 0 {
 		limiter := getRateLimiter(sink.ID, maxPerMinute)
 		if !limiter.Allow() {
@@ -600,14 +822,26 @@ func sendBatchContent(sink Sink, contents []string, client *http.Client) error {
 		}
 	}
 
-	batchJSON, err := json.Marshal(contents)
+	result, err := transformSinkContent(sink, contents)
+	if err != nil {
+		return fmt.Errorf("failed to transform contents: %v", err)
+	}
+
+	batchJSON, err := json.Marshal(result.Messages)
 	if err != nil {
 		return fmt.Errorf("failed to marshal batch content: %v", err)
 	}
 
 	logger.Debug("Sending batch content: %s", string(batchJSON))
 
-	req, err := http.NewRequest("POST", sink.URL+"record-batch", bytes.NewReader(batchJSON))
+	url := sink.URL
+	if result.Request.Path != "" {
+		url = strings.TrimRight(url, "/") + "/" + strings.TrimLeft(result.Request.Path, "/")
+	} else {
+		url = sink.URL + "record-batch"
+	}
+
+	req, err := http.NewRequest("POST", url, bytes.NewReader(batchJSON))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %v", err)
 	}
@@ -619,6 +853,11 @@ func sendBatchContent(sink Sink, contents []string, client *http.Client) error {
 		req.Header.Set("RF-ENV-NAME", config.EnvName)
 	}
 	req.Header.Set("RF-HOSTNAME", config.HostName)
+
+	// Add custom headers from transform script
+	for k, v := range result.Request.Headers {
+		req.Header.Set(k, v)
+	}
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -672,14 +911,14 @@ func startNodeInfoReporting() {
 			c, _ := cpu.Percent(time.Second, false)
 			warnCount, errorCount := logger.GetLogStats()
 			nodeInfo := struct {
-				MemoryProcess      float64   `json:"memoryProcess"`
-				MemoryHostTotal    float64   `json:"memoryHostTotal"`
-				MemoryHostFree     float64   `json:"memoryHostFree"`
-				MemoryHostUsedPct  float64   `json:"memoryHostUsedPct"`
-				CpuPercentHost     float64   `json:"cpuPercentHost"`
-				LastUpdated        time.Time `json:"lastUpdated"`
-				WarnCount         int64       `json:"warnCount"`
-				ErrorCount        int64       `json:"errorCount"`
+				MemoryProcess     float64   `json:"memoryProcess"`
+				MemoryHostTotal   float64   `json:"memoryHostTotal"`
+				MemoryHostFree    float64   `json:"memoryHostFree"`
+				MemoryHostUsedPct float64   `json:"memoryHostUsedPct"`
+				CpuPercentHost    float64   `json:"cpuPercentHost"`
+				LastUpdated       time.Time `json:"lastUpdated"`
+				WarnCount         int64     `json:"warnCount"`
+				ErrorCount        int64     `json:"errorCount"`
 			}{
 				MemoryProcess:     float64(memStats.Alloc),
 				MemoryHostTotal:   float64(v.Total),
@@ -702,7 +941,7 @@ func startNodeInfoReporting() {
 			for _, sink := range config.Sinks {
 				// Skip if we've already sent to this URL
 				if sentUrls[sink.URL] {
-						continue
+					continue
 				}
 				sentUrls[sink.URL] = true
 
@@ -723,7 +962,7 @@ func startNodeInfoReporting() {
 
 				req.Header.Set("Content-Type", "application/json")
 				if sink.AuthBearer != "" {
-						req.Header.Set("Authorization", "Bearer "+sink.AuthBearer)
+					req.Header.Set("Authorization", "Bearer "+sink.AuthBearer)
 				}
 
 				resp, err := client.Do(req)
@@ -777,7 +1016,7 @@ func main() {
 		go func(s Sink) {
 			db, err, _ := setupSql(s.DatabasePath, true)
 			if err != nil {
-				if(db != nil) {
+				if db != nil {
 					db.Close()
 					db = nil
 				}
