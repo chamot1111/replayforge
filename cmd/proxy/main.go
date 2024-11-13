@@ -270,9 +270,11 @@ func processSinkRelay(s Sink) {
 				newDelay = maxBackoffDelay
 			}
 			sinkBackoffDelays.Store(s.ID, newDelay)
+			logger.Debug("Sink %s: Using backoff delay of %v\n", s.ID, newDelay)
 			time.Sleep(newDelay)
 		} else {
 			sinkBackoffDelays.Store(s.ID, initialBackoffDelay)
+			logger.Debug("Sink %s: no backoff delay of %v\n", s.ID, time.Duration(heartbeatIntervalMs) * time.Millisecond)
 			time.Sleep(time.Duration(heartbeatIntervalMs) * time.Millisecond)
 		}
 	}
@@ -316,9 +318,10 @@ func startStatusServer() {
 				} else {
 					sinkDetails[sink.ID] = map[string]interface{}{
 						"totalEvents":     count,
+						"batchCounter":    sink.batchCounter,
 						"lastMessage": func(msg string) string {
-							if len(msg) > 10 {
-								return msg[:10] + "..."
+							if len(msg) > 15 {
+								return msg[:15] + "..."
 							}
 							return msg
 						}(lastMsg),

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,7 +11,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"database/sql"
 
 	"github.com/Shopify/go-lua"
 	"github.com/chamot1111/replayforge/pkgs/logger"
@@ -39,6 +39,7 @@ type Sink struct {
 	Config               SinkConfig `json:"config"`
 	vm                   *SinkVM
 	lastBatchTime        time.Time
+	batchCounter         int        // Added field to track batch count
 }
 
 type LuaVM struct {
@@ -121,8 +122,9 @@ func sinkDbToRelayServer(sink Sink) error {
 
 		if len(batchContent) >= maxEvents || batchSize >= goalBytes ||
 					(len(batchContent) > 0 && time.Since(sink.lastBatchTime) >= time.Duration(sink.GetBatchTimeoutSecs())*time.Second) {
+			sink.batchCounter++
 			if err := sendBatchContent(&sink, batchContent, client); err != nil {
-				logger.Error("Failed to send batch content: %v", err)
+				logger.Error("Failed to send batch content (batch #%d): %v", sink.batchCounter, err)
 				idsToDelete = idsToDelete[len(batchContent):]
 				return err
 			}
@@ -130,7 +132,9 @@ func sinkDbToRelayServer(sink Sink) error {
 			batchSize = 0
 			sink.lastBatchTime = time.Now()
 		} else {
-			logger.Debug("Not sending batch yet: %d events, %d total size, waited %v/%d seconds", len(batchContent), batchSize, time.Since(sink.lastBatchTime), sink.GetBatchTimeoutSecs())
+			logger.Debug("Not sending batch yet (batch #%d): %d events, %d total size, waited %v/%d seconds (last batch time: %v)",
+				sink.batchCounter+1, len(batchContent), batchSize, time.Since(sink.lastBatchTime),
+				sink.GetBatchTimeoutSecs(), sink.lastBatchTime)
 		}
 	}
 
@@ -149,7 +153,7 @@ func sinkDbToRelayServer(sink Sink) error {
 func sendBatchContent(sink *Sink, contents []string, client *http.Client) error {
 	if sink.URL == relayURLSpecialValue {
 		for _, content := range contents {
-			logger.Debug("Sending content to stdout: %s", content)
+			logger.Debug("Sending content to stdout (batch #%d): %s", sink.batchCounter, content)
 		}
 		return nil
 	}
@@ -172,7 +176,7 @@ func sendBatchContent(sink *Sink, contents []string, client *http.Client) error 
 		return fmt.Errorf("failed to marshal batch content: %v", err)
 	}
 
-	logger.Debug("Sending batch content: %s", string(batchJSON))
+	logger.Debug("Sending batch content #%d: %s", sink.batchCounter, string(batchJSON))
 
 	url := sink.URL
 	if result.Request.Path != "" {
@@ -455,26 +459,26 @@ func setupSinks() {
 // getSinkStats retrieves statistics about a sink's database including the total event count
 // and the most recent message content.
 func getSinkStats(sink Sink) (int, string, error) {
- sinkDB, err, isErrDbSize := setupSql(sink.DatabasePath, false)
- if err != nil && !isErrDbSize {
-  logger.Error("Failed to open sink database: %v", err)
-  return 0, "", err
- }
- defer sinkDB.Close()
+	sinkDB, err, isErrDbSize := setupSql(sink.DatabasePath, false)
+	if err != nil && !isErrDbSize {
+		logger.Error("Failed to open sink database: %v", err)
+		return 0, "", err
+	}
+	defer sinkDB.Close()
 
- var count int
- err = sinkDB.QueryRow("SELECT COUNT(*) FROM sink_events").Scan(&count)
- if err != nil {
-  logger.Error("Failed to count sink events: %v", err)
-  return 0, "", err
- }
+	var count int
+	err = sinkDB.QueryRow("SELECT COUNT(*) FROM sink_events").Scan(&count)
+	if err != nil {
+		logger.Error("Failed to count sink events: %v", err)
+		return 0, "", err
+	}
 
- var lastMessage string
- err = sinkDB.QueryRow("SELECT content FROM sink_events ORDER BY id DESC LIMIT 1").Scan(&lastMessage)
- if err != nil && err != sql.ErrNoRows {
-  logger.Error("Failed to get last message: %v", err)
-  return count, "", err
- }
+	var lastMessage string
+	err = sinkDB.QueryRow("SELECT content FROM sink_events ORDER BY id DESC LIMIT 1").Scan(&lastMessage)
+	if err != nil && err != sql.ErrNoRows {
+		logger.Error("Failed to get last message: %v", err)
+		return count, "", err
+	}
 
- return count, lastMessage, nil
+	return count, lastMessage, nil
 }
