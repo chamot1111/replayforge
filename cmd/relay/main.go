@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/chamot1111/replayforge/internal/envparser"
+	"github.com/chamot1111/replayforge/version"
 	_ "github.com/mattn/go-sqlite3"
 	"tailscale.com/tsnet"
 	"github.com/chamot1111/replayforge/pkgs/logger"
@@ -86,7 +87,13 @@ func init() {
 
 	flag.StringVar(&configPath, "c", "", "Path to config file")
 	flag.IntVar(&port, "p", 8081, "Port to listen on")
+	versionFlag := flag.Bool("v", false, "Affiche la version")
 	flag.Parse()
+
+	if *versionFlag {
+		fmt.Printf("Version: %s\n", version.Version)
+		os.Exit(0)
+	}
 
 	// Start goroutine to reset per-minute stats
 	go func() {

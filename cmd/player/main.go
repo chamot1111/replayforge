@@ -18,6 +18,7 @@ import (
 	"github.com/chamot1111/replayforge/pkgs/lualibs"
 	"github.com/chamot1111/replayforge/pkgs/playerplugin"
 	"github.com/chamot1111/replayforge/pkgs/logger"
+	"github.com/chamot1111/replayforge/version"
 
 	"github.com/Shopify/go-lua"
 	"github.com/chamot1111/replayforge/internal/envparser"
@@ -126,9 +127,15 @@ func init() {
 	if logLevel != "" {
 		logger.SetLogLevel(logLevel)
 	}
-
+	versionFlag := flag.Bool("v", false, "Affiche la version")
 	flag.StringVar(&configPath, "c", "config.json", "Path to the configuration file")
 	flag.Parse()
+
+	if *versionFlag {
+		fmt.Printf("Version: %s\n", version.Version)
+		os.Exit(0)
+	}
+
 	logger.Info("Config path: %s", configPath)
 	configData, err := os.ReadFile(configPath)
 	if err != nil {

@@ -15,6 +15,7 @@ import (
 	"tailscale.com/tsnet"
 
 	"github.com/chamot1111/replayforge/pkgs/logger"
+	"github.com/chamot1111/replayforge/version"
 
 
 )
@@ -143,7 +144,13 @@ func parseFlags() {
 	flag.StringVar(&configPath, "c", "", "Path to config file")
 	flag.StringVar(&dbgScriptPath, "dbg", "", "Debug mode: path to script file")
 	flag.StringVar(&dbgFilePath, "dbg-file", "", "Debug mode: path to input file")
+	versionFlag := flag.Bool("v", false, "Affiche la version")
 	flag.Parse()
+
+	if *versionFlag {
+		fmt.Printf("Version: %s\n", version.Version)
+		os.Exit(0)
+	}
 
 	if configPath == "" && dbgScriptPath == "" {
 		logger.Fatal("Either config file path (-c) or debug script path (--dbg) must be provided")
