@@ -102,10 +102,12 @@ function Process(content, emit)
         end
     end
 end
+```
 
 ```lua title="log_to_data_dog.lua"
 service_name = os.getenv("DD_SERVICE")
 dd_api_key = os.getenv("DD_API_KEY")
+dd_application_key = os.getenv("DD_APPLICATION_KEY")
 
 function TransformBatch(messages, request)
     local dd_messages = {}
@@ -126,7 +128,8 @@ function TransformBatch(messages, request)
     request.path = "/api/v2/logs"
     request.headers = {
         ["Content-Type"] = "application/json",
-        ["DD-API-KEY"] = dd_api_key
+        ["DD-API-KEY"] = dd_api_key,
+        ["DD-APPLICATION-KEY"] = dd_application_key
     }
 
     return dd_messages, request

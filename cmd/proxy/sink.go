@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"database/sql"
 
 	"github.com/Shopify/go-lua"
 	"github.com/chamot1111/replayforge/pkgs/logger"
@@ -58,6 +59,7 @@ func NewSinkVM(script string) *SinkVM {
 		script: script,
 	}
 }
+
 func sinkDbToRelayServer(sink Sink) error {
 	if _, err := os.Stat(sink.DatabasePath); os.IsNotExist(err) {
 		logger.Info("Database file does not exist: %s", sink.DatabasePath)
@@ -127,16 +129,9 @@ func sinkDbToRelayServer(sink Sink) error {
 			batchContent = nil
 			batchSize = 0
 			sink.lastBatchTime = time.Now()
+		} else {
+			logger.Debug("Not sending batch yet: %d events, %d total size, waited %v/%d seconds", len(batchContent), batchSize, time.Since(sink.lastBatchTime), sink.GetBatchTimeoutSecs())
 		}
-	}
-
-	if len(batchContent) > 0 {
-		if err := sendBatchContent(&sink, batchContent, client); err != nil {
-			logger.Error("Failed to send remaining batch content: %v", err)
-			idsToDelete = idsToDelete[len(batchContent):]
-			return err
-		}
-		sink.lastBatchTime = time.Now()
 	}
 
 	if len(idsToDelete) > 0 {
@@ -455,4 +450,31 @@ func setupSinks() {
 			}
 		}
 	}
+}
+
+// getSinkStats retrieves statistics about a sink's database including the total event count
+// and the most recent message content.
+func getSinkStats(sink Sink) (int, string, error) {
+ sinkDB, err, isErrDbSize := setupSql(sink.DatabasePath, false)
+ if err != nil && !isErrDbSize {
+  logger.Error("Failed to open sink database: %v", err)
+  return 0, "", err
+ }
+ defer sinkDB.Close()
+
+ var count int
+ err = sinkDB.QueryRow("SELECT COUNT(*) FROM sink_events").Scan(&count)
+ if err != nil {
+  logger.Error("Failed to count sink events: %v", err)
+  return 0, "", err
+ }
+
+ var lastMessage string
+ err = sinkDB.QueryRow("SELECT content FROM sink_events ORDER BY id DESC LIMIT 1").Scan(&lastMessage)
+ if err != nil && err != sql.ErrNoRows {
+  logger.Error("Failed to get last message: %v", err)
+  return count, "", err
+ }
+
+ return count, lastMessage, nil
 }

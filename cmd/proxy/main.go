@@ -305,9 +305,33 @@ func startStatusServer() {
 			w.Header().Set("Content-Type", "application/json")
 			stats.RLock()
 			defer stats.RUnlock()
-			json.NewEncoder(w).Encode(map[string]interface{}{
+
+			sinkDetails := make(map[string]map[string]interface{})
+			for _, sink := range config.Sinks {
+				count, lastMsg, err := getSinkStats(sink)
+				if err != nil {
+					sinkDetails[sink.ID] = map[string]interface{}{
+						"error": err.Error(),
+					}
+				} else {
+					sinkDetails[sink.ID] = map[string]interface{}{
+						"totalEvents":     count,
+						"lastMessage": func(msg string) string {
+							if len(msg) > 10 {
+								return msg[:10] + "..."
+							}
+							return msg
+						}(lastMsg),
+					}
+				}
+			}
+
+			enc := json.NewEncoder(w)
+			enc.SetIndent("", "    ")
+			enc.Encode(map[string]interface{}{
 				"sources": stats.Sources,
 				"sinks":   stats.Sinks,
+				"sinkDetails": sinkDetails,
 				"uptime":  time.Since(stats.Started).String(),
 			})
 		})
