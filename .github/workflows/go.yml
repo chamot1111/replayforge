@@ -21,9 +21,10 @@ jobs:
 
     - name: Build for Linux
       run: |
-        go build -ldflags "-s -w" -v -o player-linux-amd64 ./cmd/player
-        go build -ldflags "-s -w" -v -o proxy-linux-amd64 ./cmd/proxy
-        go build -ldflags "-s -w" -v -o relay-linux-amd64 ./cmd/relay
+        VERSION=${GITHUB_REF#refs/tags/}
+        go build -ldflags "-s -w -X github.com/chamot1111/replayforge/version.Version=${VERSION}" -v -o player-linux-amd64 ./cmd/player
+        go build -ldflags "-s -w -X github.com/chamot1111/replayforge/version.Version=${VERSION}" -v -o proxy-linux-amd64 ./cmd/proxy
+        go build -ldflags "-s -w -X github.com/chamot1111/replayforge/version.Version=${VERSION}" -v -o relay-linux-amd64 ./cmd/relay
 
     - name: Run UPX
       uses: crazy-max/ghaction-upx@v3

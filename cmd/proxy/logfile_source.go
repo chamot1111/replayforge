@@ -52,6 +52,7 @@ func (l *LogFileSource) Init(config SourceConfig, eventChan chan<- EventSource) 
 }
 
 func (l *LogFileSource) Start() error {
+	logger.Debug("Start %s", l.ID)
 	l.lastPosition = 0
 	go func() {
 		for {
@@ -67,6 +68,7 @@ func (l *LogFileSource) Stop() error {
 	return nil
 }
 func (l *LogFileSource) readLogFile() {
+	logger.Debug("Entering readLogFile loop for %s - ID: %s", l.FilePath, l.ID)
 	file, err := os.Open(l.FilePath)
 	if err != nil {
 		if os.IsNotExist(err) {
