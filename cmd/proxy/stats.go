@@ -123,8 +123,18 @@ func startStatusServer() {
 			w.Header().Set("Content-Type", "application/json")
 			stats.RLock()
 			defer stats.RUnlock()
+
+			// Get filter parameters
+			sinkFilter := r.URL.Query().Get("sink")
+			sourceFilter := r.URL.Query().Get("source")
+
 			sinks := make(map[string]map[string]interface{})
 			for _, sink := range config.Sinks {
+				// Skip if sink filter specified and doesn't match
+				if sinkFilter != "" && sink.ID != sinkFilter {
+					continue
+				}
+
 				count, lastMsg, err := getSinkStats(sink)
 				if err != nil {
 					sinks[sink.ID] = map[string]interface{}{
@@ -174,10 +184,16 @@ func startStatusServer() {
 				}
 			}
 
-			sourceDetails := make(map[string]map[string]interface{})
+			sources := make(map[string]map[string]interface{})
 			for _, source := range config.Sources {
 				var sourceConfig SourceConfig
 				json.Unmarshal(source, &sourceConfig)
+
+				// Skip if source filter specified and doesn't match
+				if sourceFilter != "" && sourceConfig.ID != sourceFilter {
+					continue
+				}
+
 				logs := logger.GetContextHistory("source", sourceConfig.ID)
 				simpleLogs := make([]map[string]interface{}, len(logs))
 				for i, log := range logs {
@@ -200,18 +216,24 @@ func startStatusServer() {
 						"level":     levelStr,
 					}
 				}
-				sourceDetails[sourceConfig.ID] = map[string]interface{}{
-					"recentLogs": simpleLogs,
+
+				sourceStats := stats.Sources[sourceConfig.ID]
+				sources[sourceConfig.ID] = map[string]interface{}{
+					"type":               sourceStats.Type,
+					"id":                 sourceStats.ID,
+					"messagesByMinute":   sourceStats.MessagesByMinute,
+					"messageSinceStart":  sourceStats.MessagesSinceStart,
+					"lastMessageDate":    sourceStats.LastMessageDate,
+					"recentLogs":         simpleLogs,
 				}
 			}
 
 			enc := json.NewEncoder(w)
 			enc.SetIndent("", "    ")
 			enc.Encode(map[string]interface{}{
-				"sources":        stats.Sources,
-				"sinks":         sinks,
-				"sourceDetails": sourceDetails,
-				"uptime":        time.Since(stats.Started).String(),
+				"sources": sources,
+				"sinks":   sinks,
+				"uptime":  time.Since(stats.Started).String(),
 			})
 		})
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
