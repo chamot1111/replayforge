@@ -45,7 +45,7 @@ func (r *RepeatFileSource) readLogFile() {
 	for {
 		file, err := os.Open(r.FilePath)
 		if err != nil {
-			logger.Error("Failed to open file %s: %v", r.FilePath, err)
+			logger.ErrorContext("source", r.ID, "Failed to open file %s: %v", r.FilePath, err)
 			time.Sleep(r.Interval)
 			continue
 		}
@@ -62,7 +62,7 @@ func (r *RepeatFileSource) readLogFile() {
 		}
 
 		if err := scanner.Err(); err != nil {
-			logger.Error("Error reading file %s: %v", r.FilePath, err)
+			logger.ErrorContext("source", r.ID, "Error reading file %s: %v", r.FilePath, err)
 		}
 
 		file.Close()

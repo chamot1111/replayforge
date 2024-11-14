@@ -1,15 +1,15 @@
 package main
 
 import (
- "encoding/json"
- "time"
- _ "github.com/mattn/go-sqlite3"
+	"encoding/json"
+	"time"
+	_ "github.com/mattn/go-sqlite3"
 
- "github.com/chamot1111/replayforge/pkgs/logger"
- "github.com/chamot1111/replayforge/internal/envparser"
- "strings"
- "os"
- "github.com/Shopify/go-lua"
+	"github.com/chamot1111/replayforge/pkgs/logger"
+	"github.com/chamot1111/replayforge/internal/envparser"
+	"strings"
+	"os"
+	"github.com/Shopify/go-lua"
 )
 
 type SinkConfig struct {
@@ -49,7 +49,7 @@ func (bs *BaseSource) GetHookInterval() time.Duration {
 		if d, err := time.ParseDuration(v); err == nil {
 			return d
 		}
-		logger.Error("Invalid duration string for HookInterval: %s", v)
+		logger.ErrorContext("source", bs.ID, "Invalid duration string for HookInterval: %s", v)
 		return 0
 	case float64:
 		return time.Duration(v) * time.Second

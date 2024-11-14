@@ -74,7 +74,7 @@ func (h *PgCallSource) pollDatabase() {
 
     for range ticker.C {
         if err := h.executeCalls(); err != nil {
-            logger.Error("Error executing PG calls: %v", err)
+            logger.ErrorContext("source", h.ID, "Error executing PG calls: %v", err)
         }
     }
 }
@@ -105,7 +105,7 @@ func (h *PgCallSource) executeCalls() error {
         queryResult := QueryResult{Success: true}
         rows, err := db.Query(call.SQL)
         if err != nil {
-            logger.Error("Error executing query %s: %v", call.Name, err)
+            logger.ErrorContext("source", h.ID, "Error executing query %s: %v", call.Name, err)
             queryResult.Success = false
             queryResult.Error = err.Error()
             results[call.Name] = queryResult
@@ -159,7 +159,7 @@ func (h *PgCallSource) executeCalls() error {
 
     wrapJsonContent, err := json.Marshal(wrapCallObject)
     if err != nil {
-        logger.Error("Error marshaling JSON: %v", err)
+        logger.ErrorContext("source", h.ID, "Error marshaling JSON: %v", err)
         return err
     }
 
@@ -172,7 +172,7 @@ func (h *PgCallSource) executeCalls() error {
     select {
     case h.EventChan <- event:
     default:
-        logger.Warn("Event channel full, dropping event")
+        logger.WarnContext("source", h.ID, "Event channel full, dropping event")
     }
 
     return nil

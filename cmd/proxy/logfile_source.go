@@ -52,7 +52,7 @@ func (l *LogFileSource) Init(config SourceConfig, eventChan chan<- EventSource) 
 }
 
 func (l *LogFileSource) Start() error {
-	logger.Debug("Start %s", l.ID)
+	logger.DebugContext("source", l.ID, "Start %s", l.ID)
 	l.lastPosition = 0
 	go func() {
 		for {
@@ -67,15 +67,16 @@ func (l *LogFileSource) Stop() error {
 	// Implement graceful shutdown if needed
 	return nil
 }
+
 func (l *LogFileSource) readLogFile() {
-	logger.Debug("Entering readLogFile loop for %s - ID: %s", l.FilePath, l.ID)
+	logger.DebugContext("source", l.ID, "Entering readLogFile loop for %s - ID: %s", l.FilePath, l.ID)
 	file, err := os.Open(l.FilePath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			time.Sleep(l.hookInterval)
 			return
 		}
-		logger.Error("Failed to open log file %s: %v", l.FilePath, err)
+		logger.ErrorContext("source", l.ID, "Failed to open log file %s: %v", l.FilePath, err)
 		time.Sleep(l.hookInterval)
 		return
 	}
@@ -83,13 +84,13 @@ func (l *LogFileSource) readLogFile() {
 
 	checksum, enoughLines, err := l.calculateChecksum(file)
 	if err != nil {
-		logger.Error("Failed to calculate checksum for %s: %v", l.FilePath, err)
+		logger.ErrorContext("source", l.ID, "Failed to calculate checksum for %s: %v", l.FilePath, err)
 		time.Sleep(l.hookInterval)
 		return
 	}
 
 	if !enoughLines {
-		logger.Debug("Not enough lines to calculate checksum for %s", l.FilePath)
+		logger.DebugContext("source", l.ID, "Not enough lines to calculate checksum for %s", l.FilePath)
 		return
 	}
 
@@ -100,7 +101,7 @@ func (l *LogFileSource) readLogFile() {
 	}
 
 	if _, err = file.Seek(l.lastPosition, 0); err != nil {
-		logger.Error("Failed to seek to last position in file %s: %v", l.FilePath, err)
+		logger.ErrorContext("source", l.ID, "Failed to seek to last position in file %s: %v", l.FilePath, err)
 		return
 	}
 
@@ -109,10 +110,10 @@ func (l *LogFileSource) readLogFile() {
 	for scanner.Scan() {
 		line := scanner.Text()
 		// Process the line here
-		logger.Debug("Read line: %s", line)
+		logger.DebugContext("source", l.ID, "Read line: %s", line)
 		bodyJSON, err := json.Marshal(map[string]string{"content": line})
 		if err != nil {
-			logger.Error("Error marshaling body JSON: %v", err)
+			logger.ErrorContext("source", l.ID, "Error marshaling body JSON: %v", err)
 			continue
 		}
 
@@ -127,7 +128,7 @@ func (l *LogFileSource) readLogFile() {
 
 		jsonContent, err := json.Marshal(wrapCallObject)
 		if err != nil {
-			logger.Error("Error marshaling JSON: %v", err)
+			logger.ErrorContext("source", l.ID, "Error marshaling JSON: %v", err)
 			return
 		}
 
@@ -142,7 +143,7 @@ func (l *LogFileSource) readLogFile() {
 			case l.EventChan <- event:
 				skippedEvent = false
 			case <-time.After(100 * time.Millisecond):
-				logger.Warn("EventChan is full, skipping all next events")
+				logger.WarnContext("source", l.ID, "EventChan is full, skipping all next events")
 				skippedEvent = true
 			}
 		} else {
@@ -156,17 +157,17 @@ func (l *LogFileSource) readLogFile() {
 	}
 
 	if err := scanner.Err(); err != nil {
-		logger.Error("Error reading log file %s: %v", l.FilePath, err)
+		logger.ErrorContext("source", l.ID, "Error reading log file %s: %v", l.FilePath, err)
 	}
 
 	l.lastPosition, _ = file.Seek(0, 1) // Get current position
 
 	if l.RemoveAfterSecs > 0 && time.Since(l.lastTruncate) >= time.Duration(l.RemoveAfterSecs)*time.Second {
-		logger.Info("Attempting to truncate log file %s", l.FilePath)
+		logger.InfoContext("source", l.ID, "Attempting to truncate log file %s", l.FilePath)
 		if err := os.Truncate(l.FilePath, 0); err != nil {
-			logger.Error("Failed to truncate log file %s: %v", l.FilePath, err)
+			logger.ErrorContext("source", l.ID, "Failed to truncate log file %s: %v", l.FilePath, err)
 		} else {
-			logger.Info("Successfully truncated log file %s after %d seconds", l.FilePath, l.RemoveAfterSecs)
+			logger.InfoContext("source", l.ID, "Successfully truncated log file %s after %d seconds", l.FilePath, l.RemoveAfterSecs)
 			l.lastTruncate = time.Now()
 		}
 	}

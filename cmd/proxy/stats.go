@@ -1,16 +1,16 @@
 package main
 
 import (
- "bytes"
- "encoding/json"
- "net/http"
- "runtime"
- "sync"
- "time"
+	"bytes"
+	"encoding/json"
+	"net/http"
+	"runtime"
+	"sync"
+	"time"
 
- "github.com/chamot1111/replayforge/pkgs/logger"
- "github.com/shirou/gopsutil/v4/cpu"
- "github.com/shirou/gopsutil/v4/mem"
+	"github.com/chamot1111/replayforge/pkgs/logger"
+	"github.com/shirou/gopsutil/v4/cpu"
+	"github.com/shirou/gopsutil/v4/mem"
 )
 
 type Stats struct {
@@ -92,7 +92,7 @@ func startNodeInfoReporting() {
 
 				req, err := http.NewRequest("POST", sink.URL+"node-info", bytes.NewBuffer(jsonData))
 				if err != nil {
-					logger.Error("Failed to create node info request: %v", err)
+					logger.ErrorContext("sink", sink.ID, "Failed to create node info request: %v", err)
 					continue
 				}
 
@@ -103,7 +103,7 @@ func startNodeInfoReporting() {
 
 				resp, err := client.Do(req)
 				if err != nil {
-					logger.Error("Failed to send node info: %v", err)
+					logger.ErrorContext("sink", sink.ID, "Failed to send node info: %v", err)
 					continue
 				}
 				resp.Body.Close()

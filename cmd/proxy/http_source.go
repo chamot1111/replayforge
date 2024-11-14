@@ -33,7 +33,7 @@ func (h *HTTPSource) Init(config SourceConfig, eventChan chan<- EventSource) err
 }
 
 func (h *HTTPSource) Start() error {
-    db, err, _ := setupSql(h.DatabasePath, true)
+    db, err, _ := setupSql(h.DatabasePath, true, "source", h.ID)
     if (err != nil) {
      if db != nil {
            db.Close()
@@ -50,9 +50,9 @@ func (h *HTTPSource) Start() error {
     }
 
     go func() {
-        logger.Info("HTTP source listening on port %d", h.ListenPort)
+        logger.InfoContext("source", h.ID, "HTTP source listening on port %d", h.ListenPort)
         if err := server.ListenAndServe(); err != nil {
-            logger.Error("HTTP server error: %v", err)
+            logger.ErrorContext("source", h.ID, "HTTP server error: %v", err)
         }
     }()
 
@@ -65,12 +65,12 @@ func (h *HTTPSource) Stop() error {
 }
 
 func (h *HTTPSource) handleRequest(w http.ResponseWriter, r *http.Request) {
-    db, err, _ := setupSql(h.DatabasePath, false)
+    db, err, _ := setupSql(h.DatabasePath, false, "source", h.ID)
     if err != nil {
      if db != nil {
             db.Close()
         }
-        logger.Error("Error setting up SQL: %v", err)
+        logger.ErrorContext("source", h.ID, "Error setting up SQL: %v", err)
         http.Error(w, fmt.Sprintf("Error: %v", err), http.StatusInternalServerError)
         return
     }
@@ -83,7 +83,7 @@ func (h *HTTPSource) handleRequest(w http.ResponseWriter, r *http.Request) {
     headers.Del("Connection")
     headers.Del("Cookie")
 
-    logger.Debug("%s [%s] %s", time.Now().Format("2006-01-02 15:04:05"), r.Method, path)
+    logger.DebugContext("source", h.ID, "%s [%s] %s", time.Now().Format("2006-01-02 15:04:05"), r.Method, path)
 
     body, err := io.ReadAll(r.Body)
     if err != nil {
@@ -102,7 +102,7 @@ func (h *HTTPSource) handleRequest(w http.ResponseWriter, r *http.Request) {
 
     jsonContent, err := json.Marshal(wrapCallObject)
     if err != nil {
-        logger.Error("Error marshaling JSON: %v", err)
+        logger.ErrorContext("source", h.ID, "Error marshaling JSON: %v", err)
         http.Error(w, fmt.Sprintf("Error: %v", err), http.StatusInternalServerError)
         return
     }
@@ -117,7 +117,7 @@ func (h *HTTPSource) handleRequest(w http.ResponseWriter, r *http.Request) {
         w.WriteHeader(http.StatusOK)
         w.Write([]byte("Request received"))
     default:
-        logger.Warn("Event channel full, dropping event")
+        logger.WarnContext("source", h.ID, "Event channel full, dropping event")
         w.WriteHeader(http.StatusServiceUnavailable)
         w.Write([]byte("Server busy, try again later"))
     }

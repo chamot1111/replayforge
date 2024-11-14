@@ -16,8 +16,6 @@ import (
 
 	"github.com/chamot1111/replayforge/pkgs/logger"
 	"github.com/chamot1111/replayforge/version"
-
-
 )
 
 const (
@@ -161,8 +159,6 @@ func parseFlags() {
 	}
 }
 
-
-
 func startStatsCleaner() {
 	go func() {
 		for {
@@ -201,23 +197,23 @@ func startSources() {
 
 		source, ok := sources[sourceConfig.ID]
 		if !ok {
-			logger.Fatal("Source %s not initialized", sourceConfig.ID)
+			logger.FatalContext("source", sourceConfig.ID, "Source not initialized")
 		}
 
 		if err := source.Start(); err != nil {
-			logger.Fatal("Failed to start source %s: %v", sourceConfig.ID, err)
+			logger.FatalContext("source", sourceConfig.ID, "Failed to start source: %v", err)
 		}
 	}
 }
 
 func startSinkProcessing() {
 	for _, sink := range config.Sinks {
-		db, err, isSpaceError := initSetupSql(sink.DatabasePath, false)
+		db, err, isSpaceError := initSetupSql(sink.DatabasePath, false, "sink", sink.ID)
 		if err != nil {
 			if !isSpaceError {
-				logger.Fatal("Error setting up SQL for sink %s: %v", sink.ID, err)
+				logger.FatalContext("sink", sink.ID, "Error setting up SQL: %v", err)
 			} else {
-				logger.Warn("Space error setting up SQL for sink %s: %v", sink.ID, err)
+				logger.WarnContext("sink", sink.ID, "Space error setting up SQL: %v", err)
 			}
 		}
 		db.Close()
@@ -228,23 +224,23 @@ func startSinkProcessing() {
 }
 
 func processSinkData(s Sink) {
-	db, err, _ := setupSql(s.DatabasePath, true)
+	db, err, _ := setupSql(s.DatabasePath, true, "sink", s.ID)
 	if err != nil {
 		if db != nil {
 			db.Close()
 			db = nil
 		}
-		logger.Error("Failed to open database for sink %s: %v", s.ID, err)
+		logger.ErrorContext("sink", s.ID, "Failed to open database: %v", err)
 	}
 	insertCount := 0
 	for content := range sinkChannels[s.ID] {
 		insertCount++
 		if db == nil {
-			logger.Warn("Database not ready for sink %s, waiting for next cycle", s.ID)
+			logger.WarnContext("sink", s.ID, "Database not ready, waiting for next cycle")
 		} else {
 			_, err = db.Exec("INSERT INTO sink_events (content) VALUES (?)", content)
 			if err != nil {
-				logger.Error("Failed to insert into sink_events for sink %s: %v", s.ID, err)
+				logger.ErrorContext("sink", s.ID, "Failed to insert into sink_events: %v", err)
 			}
 		}
 		if insertCount >= 100 {
@@ -254,13 +250,13 @@ func processSinkData(s Sink) {
 				db = nil
 			}
 
-			db, err, _ = setupSql(s.DatabasePath, true)
+			db, err, _ = setupSql(s.DatabasePath, true, "sink", s.ID)
 			if err != nil {
 				if db != nil {
 					db.Close()
 					db = nil
 				}
-				logger.Error("Failed to reopen database for sink %s: %v", s.ID, err)
+				logger.ErrorContext("sink", s.ID, "Failed to reopen database: %v", err)
 			}
 		}
 	}
@@ -277,11 +273,11 @@ func processSinkRelay(s Sink) {
 				newDelay = maxBackoffDelay
 			}
 			sinkBackoffDelays.Store(s.ID, newDelay)
-			logger.Debug("Sink %s: Using backoff delay of %v\n", s.ID, newDelay)
+			logger.DebugContext("sink", s.ID, "Using backoff delay of %v\n", newDelay)
 			time.Sleep(newDelay)
 		} else {
 			sinkBackoffDelays.Store(s.ID, initialBackoffDelay)
-			logger.Debug("Sink %s: no backoff delay of %v\n", s.ID, time.Duration(heartbeatIntervalMs) * time.Millisecond)
+			logger.DebugContext("sink", s.ID, "No backoff delay of %v\n", time.Duration(heartbeatIntervalMs) * time.Millisecond)
 			time.Sleep(time.Duration(heartbeatIntervalMs) * time.Millisecond)
 		}
 	}

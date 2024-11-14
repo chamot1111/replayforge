@@ -65,13 +65,13 @@ func NewSinkVM(script string, sinkID string) *SinkVM {
 
 func sinkDbToRelayServer(sink Sink) error {
 	if _, err := os.Stat(sink.DatabasePath); os.IsNotExist(err) {
-		logger.Info("Database file does not exist: %s", sink.DatabasePath)
+		logger.InfoContext("sink", sink.ID, "Database file does not exist: %s", sink.DatabasePath)
 		return nil
 	}
 
-	sinkDB, err, isErrDbSize := setupSql(sink.DatabasePath, false)
+	sinkDB, err, isErrDbSize := setupSql(sink.DatabasePath, false, "sink", sink.ID)
 	if err != nil && !isErrDbSize {
-		logger.Error("Failed to open sink database: %v", err)
+		logger.ErrorContext("sink", sink.ID, "Failed to open sink database: %v", err)
 		return err
 	}
 	defer sinkDB.Close()
@@ -81,7 +81,7 @@ func sinkDbToRelayServer(sink Sink) error {
 
 	rows, err := sinkDB.Query(fmt.Sprintf("SELECT id, content FROM sink_events ORDER BY id ASC LIMIT %d", maxEvents))
 	if err != nil {
-		logger.Error("Failed to query sink_events: %v", err)
+		logger.ErrorContext("sink", sink.ID, "Failed to query sink_events: %v", err)
 		return err
 	}
 	defer rows.Close()
@@ -106,15 +106,15 @@ func sinkDbToRelayServer(sink Sink) error {
 		var id int
 		var content string
 		err := rows.Scan(&id, &content)
-		logger.Debug("Processing sink event: id=%d, content=%s", id, content)
+		logger.DebugContext("sink", sink.ID, "Processing sink event: id=%d, content=%s", id, content)
 		if err != nil {
-			logger.Error("Failed to scan row from sink_events: %v", err)
+			logger.ErrorContext("sink", sink.ID, "Failed to scan row from sink_events: %v", err)
 			continue
 		}
 
 		contentBytes := len(content)
 		if contentBytes+batchSize > maxPayload {
-			logger.Warn("Content size (%d bytes) would exceed max payload size, skipping", contentBytes)
+			logger.WarnContext("sink", sink.ID, "Content size (%d bytes) would exceed max payload size, skipping", contentBytes)
 			continue
 		}
 
@@ -126,7 +126,7 @@ func sinkDbToRelayServer(sink Sink) error {
 					(len(batchContent) > 0 && time.Since(sink.lastBatchTime) >= time.Duration(sink.GetBatchTimeoutSecs())*time.Second) {
 			sink.batchCounter++
 			if err := sendBatchContent(&sink, batchContent, client); err != nil {
-				logger.Error("Failed to send batch content (batch #%d): %v", sink.batchCounter, err)
+				logger.ErrorContext("sink", sink.ID, "Failed to send batch content (batch #%d): %v", sink.batchCounter, err)
 				idsToDelete = idsToDelete[len(batchContent):]
 				return err
 			}
@@ -134,7 +134,7 @@ func sinkDbToRelayServer(sink Sink) error {
 			batchSize = 0
 			sink.lastBatchTime = time.Now()
 		} else {
-			logger.Debug("Not sending batch yet (batch #%d): %d events, %d total size, waited %v/%d seconds (last batch time: %v)",
+			logger.DebugContext("sink", sink.ID, "Not sending batch yet (batch #%d): %d events, %d total size, waited %v/%d seconds (last batch time: %v)",
 				sink.batchCounter+1, len(batchContent), batchSize, time.Since(sink.lastBatchTime),
 				sink.GetBatchTimeoutSecs(), sink.lastBatchTime)
 		}
@@ -144,7 +144,7 @@ func sinkDbToRelayServer(sink Sink) error {
 		query := fmt.Sprintf("DELETE FROM sink_events WHERE id IN (%s)", strings.Trim(strings.Join(strings.Fields(fmt.Sprint(idsToDelete)), ","), "[]"))
 		_, err = sinkDB.Exec(query)
 		if err != nil {
-			logger.Error("Failed to delete records from sink_events: %v", err)
+			logger.ErrorContext("sink", sink.ID, "Failed to delete records from sink_events: %v", err)
 			return err
 		}
 	}
@@ -155,7 +155,7 @@ func sinkDbToRelayServer(sink Sink) error {
 func sendBatchContent(sink *Sink, contents []string, client *http.Client) error {
 	if sink.URL == relayURLSpecialValue {
 		for _, content := range contents {
-			logger.Debug("Sending content to stdout (batch #%d): %s", sink.batchCounter, content)
+			logger.DebugContext("sink", sink.ID, "Sending content to stdout (batch #%d): %s", sink.batchCounter, content)
 		}
 		return nil
 	}
@@ -178,7 +178,7 @@ func sendBatchContent(sink *Sink, contents []string, client *http.Client) error 
 		return fmt.Errorf("failed to marshal batch content: %v", err)
 	}
 
-	logger.Debug("Sending batch content #%d: %s", sink.batchCounter, string(batchJSON))
+	logger.DebugContext("sink", sink.ID, "Sending batch content #%d: %s", sink.batchCounter, string(batchJSON))
 
 	url := sink.URL
 	if result.Request.Path != "" {
@@ -455,18 +455,18 @@ func setupSinks() {
 		if sink.TransformScript != "" {
 			script, err := os.ReadFile(sink.TransformScript)
 			if err != nil {
-				logger.Fatal("Failed to read transform script for sink %s: %v", sink.ID, err)
+				logger.FatalContext("sink", sink.ID, "Failed to read transform script: %v", err)
 			}
 			sink.vm = NewSinkVM(string(script), sink.ID)
 		}
 
 		sinkChannels[sink.ID] = make(chan string, 100)
-		db, err, isSpaceError := initSetupSql(sink.DatabasePath, false)
+		db, err, isSpaceError := initSetupSql(sink.DatabasePath, false, "sink", sink.ID)
 		if err != nil {
 			if !isSpaceError {
-				logger.Fatal("Error setting up SQL for sink %s: %v", sink.ID, err)
+				logger.FatalContext("sink", sink.ID, "Error setting up SQL: %v", err)
 			} else {
-				logger.Warn("Space error setting up SQL for sink %s: %v", sink.ID, err)
+				logger.WarnContext("sink", sink.ID, "Space error setting up SQL: %v", err)
 			}
 		}
 		db.Close()
@@ -488,7 +488,7 @@ func setupSinks() {
 	} else {
 		for _, sink := range config.Sinks {
 			if sink.UseTsnet {
-				logger.Error("Sink %s uses tsnet but no tsnetHostname is configured", sink.ID)
+				logger.ErrorContext("sink", sink.ID, "Sink uses tsnet but no tsnetHostname is configured")
 			}
 		}
 	}
@@ -497,9 +497,9 @@ func setupSinks() {
 // getSinkStats retrieves statistics about a sink's database including the total event count
 // and the most recent message content.
 func getSinkStats(sink Sink) (int, string, error) {
-	sinkDB, err, isErrDbSize := setupSql(sink.DatabasePath, false)
+	sinkDB, err, isErrDbSize := setupSql(sink.DatabasePath, false, "sink", sink.ID)
 	if err != nil && !isErrDbSize {
-		logger.Error("Failed to open sink database: %v", err)
+		logger.ErrorContext("sink", sink.ID, "Failed to open sink database: %v", err)
 		return 0, "", err
 	}
 	defer sinkDB.Close()
@@ -507,14 +507,14 @@ func getSinkStats(sink Sink) (int, string, error) {
 	var count int
 	err = sinkDB.QueryRow("SELECT COUNT(*) FROM sink_events").Scan(&count)
 	if err != nil {
-		logger.Error("Failed to count sink events: %v", err)
+		logger.ErrorContext("sink", sink.ID, "Failed to count sink events: %v", err)
 		return 0, "", err
 	}
 
 	var lastMessage string
 	err = sinkDB.QueryRow("SELECT content FROM sink_events ORDER BY id DESC LIMIT 1").Scan(&lastMessage)
 	if err != nil && err != sql.ErrNoRows {
-		logger.Error("Failed to get last message: %v", err)
+		logger.ErrorContext("sink", sink.ID, "Failed to get last message: %v", err)
 		return count, "", err
 	}
 
