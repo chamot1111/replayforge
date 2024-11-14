@@ -47,10 +47,11 @@ type Config struct {
 func (bs *BaseSource) GetHookInterval() time.Duration {
 	switch v := bs.HookInterval.(type) {
 	case string:
+		var err error
 		if d, err := time.ParseDuration(v); err == nil {
 			return d
 		}
-		logger.ErrorContext("source", bs.ID, "Invalid duration string for HookInterval: %s", v)
+		logger.ErrorContext("source", bs.ID, "Invalid duration string for HookInterval: %s (%v)", v, err)
 		return 0
 	case float64:
 		return time.Duration(v) * time.Second
