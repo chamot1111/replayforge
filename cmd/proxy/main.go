@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"net/http"
 	"os"
 	"sync"
 	"time"
@@ -299,88 +298,6 @@ func startTimerHandlers() {
 					time.Sleep(hookInterval)
 				}
 			}(sourceConfig)
-		}
-	}
-}
-
-func startStatusServer() {
-	if config.PortStatusZ > 0 {
-		mux := http.NewServeMux()
-		mux.HandleFunc("/statusz", func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			stats.RLock()
-			defer stats.RUnlock()
-			sinkDetails := make(map[string]map[string]interface{})
-			for _, sink := range config.Sinks {
-				count, lastMsg, err := getSinkStats(sink)
-				if err != nil {
-					sinkDetails[sink.ID] = map[string]interface{}{
-						"error": err.Error(),
-					}
-				} else {
-					logs := logger.GetContextHistory("sink", sink.ID)
-					simpleLogs := make([]map[string]interface{}, len(logs))
-					for i, log := range logs {
-						simpleLogs[i] = map[string]interface{}{
-							"timestamp": log.Timestamp,
-							"message":   log.Message,
-						}
-					}
-
-					sinkDetails[sink.ID] = map[string]interface{}{
-						"totalEvents":     count,
-						"batchCounter":    sink.batchCounter,
-						"lastMessage": func(msg string) string {
-							if len(msg) > 15 {
-								return msg[:15] + "..."
-							}
-							return msg
-						}(lastMsg),
-						"recentLogs": simpleLogs,
-					}
-				}
-			}
-
-			sourceDetails := make(map[string]map[string]interface{})
-			for _, source := range config.Sources {
-				var sourceConfig SourceConfig
-				json.Unmarshal(source, &sourceConfig)
-				logs := logger.GetContextHistory("source", sourceConfig.ID)
-				simpleLogs := make([]map[string]interface{}, len(logs))
-				for i, log := range logs {
-					simpleLogs[i] = map[string]interface{}{
-						"timestamp": log.Timestamp,
-						"message":   log.Message,
-					}
-				}
-				sourceDetails[sourceConfig.ID] = map[string]interface{}{
-					"recentLogs": simpleLogs,
-				}
-			}
-
-			enc := json.NewEncoder(w)
-			enc.SetIndent("", "    ")
-			enc.Encode(map[string]interface{}{
-				"sources":      stats.Sources,
-				"sinks":       stats.Sinks,
-				"sinkDetails": sinkDetails,
-				"sourceDetails": sourceDetails,
-				"uptime":      time.Since(stats.Started).String(),
-			})
-		})
-		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "text/plain")
-			w.Write([]byte("ok"))
-		})
-
-		if config.UseTsnetStatusZ && tsnetServer != nil {
-			ln, err := tsnetServer.Listen("tcp", fmt.Sprintf(":%d", config.PortStatusZ))
-			if err != nil {
-				logger.Fatal("Failed to create tsnet listener: %v", err)
-			}
-			go http.Serve(ln, mux)
-		} else {
-			go http.ListenAndServe(fmt.Sprintf(":%d", config.PortStatusZ), mux)
 		}
 	}
 }
