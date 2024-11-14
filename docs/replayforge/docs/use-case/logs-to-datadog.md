@@ -135,3 +135,11 @@ function TransformBatch(messages, request)
     return dd_messages, request
 end
 ```
+
+:::warning
+For better efficiency and usability in Datadog, it is recommended to set up one sink per service rather than grouping multiple services together. This approach provides better uniformity in log transmission and makes log data more manageable within Datadog.
+:::
+
+:::tip
+The `ddsource` field should be set to the type of technology generating the logs, such as "nginx", "postgresql", etc. This allows Datadog to automatically apply the appropriate log parsing rules and extract relevant metadata fields.
+:::

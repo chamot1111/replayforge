@@ -55,11 +55,13 @@ func (l *LogFileSource) Start() error {
 	logger.DebugContext("source", l.ID, "Start %s", l.ID)
 	l.lastPosition = 0
 	go func() {
-		for {
-			l.readLogFile()
-			time.Sleep(l.hookInterval)
-		}
-	}()
+        ticker := time.NewTicker(l.hookInterval)
+        defer ticker.Stop()
+
+        for range ticker.C {
+            l.readLogFile()
+        }
+    }()
 	return nil
 }
 
