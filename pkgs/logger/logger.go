@@ -26,12 +26,13 @@ type logEntry struct {
 	level     LogLevel
 }
 
-type contextLogEntry struct {
-	message     string
-	timestamp   time.Time
-	level       LogLevel
-	sinkOrSource string
-	id          string
+// ContextLogEntry stores context information for a log message
+type ContextLogEntry struct {
+	Message     string
+	Timestamp   time.Time
+	Level       LogLevel
+	SinkOrSource string
+	ID          string
 }
 
 var (
@@ -39,7 +40,7 @@ var (
 	mu             sync.Mutex
 	logger         *log.Logger
 	logHistory     map[LogLevel][]logEntry
-	contextHistory map[string][]contextLogEntry // key is "sinkOrSource:id"
+	contextHistory map[string][]ContextLogEntry // key is "sinkOrSource:id"
 	warnCount      int64
 	errorCount     int64
 )
@@ -53,7 +54,7 @@ type Config struct {
 
 func init() {
 	logHistory = make(map[LogLevel][]logEntry)
-	contextHistory = make(map[string][]contextLogEntry)
+	contextHistory = make(map[string][]ContextLogEntry)
 	// Configuration par défaut
 	Configure(Config{
 		Level:      "info",
@@ -107,7 +108,7 @@ func GetLogStats() (int64, int64) {
 }
 
 // GetContextHistory returns the last 10 messages for a given sink/source and id
-func GetContextHistory(sinkOrSource string, id string) []contextLogEntry {
+func GetContextHistory(sinkOrSource string, id string) []ContextLogEntry {
 	mu.Lock()
 	defer mu.Unlock()
 	key := fmt.Sprintf("%s:%s", sinkOrSource, id)
@@ -198,12 +199,12 @@ func logMsgWithContext(level LogLevel, sinkOrSource string, id string, format st
 
 		// Store in context history
 		key := fmt.Sprintf("%s:%s", sinkOrSource, id)
-		entry := contextLogEntry{
-			message: msg,
-			timestamp: time.Now(),
-			level: level,
-			sinkOrSource: sinkOrSource,
-			id: id,
+		entry := ContextLogEntry{
+			Message: msg,
+			Timestamp: time.Now(),
+			Level: level,
+			SinkOrSource: sinkOrSource,
+			ID: id,
 		}
 
 		history := contextHistory[key]

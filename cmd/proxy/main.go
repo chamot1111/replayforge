@@ -310,7 +310,6 @@ func startStatusServer() {
 			w.Header().Set("Content-Type", "application/json")
 			stats.RLock()
 			defer stats.RUnlock()
-
 			sinkDetails := make(map[string]map[string]interface{})
 			for _, sink := range config.Sinks {
 				count, lastMsg, err := getSinkStats(sink)
@@ -319,6 +318,15 @@ func startStatusServer() {
 						"error": err.Error(),
 					}
 				} else {
+					logs := logger.GetContextHistory("sink", sink.ID)
+					simpleLogs := make([]map[string]interface{}, len(logs))
+					for i, log := range logs {
+						simpleLogs[i] = map[string]interface{}{
+							"timestamp": log.Timestamp,
+							"message":   log.Message,
+						}
+					}
+
 					sinkDetails[sink.ID] = map[string]interface{}{
 						"totalEvents":     count,
 						"batchCounter":    sink.batchCounter,
@@ -328,7 +336,7 @@ func startStatusServer() {
 							}
 							return msg
 						}(lastMsg),
-						"recentLogs": logger.GetContextHistory("sink", sink.ID),
+						"recentLogs": simpleLogs,
 					}
 				}
 			}
@@ -337,8 +345,16 @@ func startStatusServer() {
 			for _, source := range config.Sources {
 				var sourceConfig SourceConfig
 				json.Unmarshal(source, &sourceConfig)
+				logs := logger.GetContextHistory("source", sourceConfig.ID)
+				simpleLogs := make([]map[string]interface{}, len(logs))
+				for i, log := range logs {
+					simpleLogs[i] = map[string]interface{}{
+						"timestamp": log.Timestamp,
+						"message":   log.Message,
+					}
+				}
 				sourceDetails[sourceConfig.ID] = map[string]interface{}{
-					"recentLogs": logger.GetContextHistory("source", sourceConfig.ID),
+					"recentLogs": simpleLogs,
 				}
 			}
 
