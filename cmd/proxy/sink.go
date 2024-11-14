@@ -53,11 +53,13 @@ type SinkVM struct {
 	currentVM *LuaVM
 	script    string
 	mutex     sync.Mutex
+	id        string
 }
 
-func NewSinkVM(script string) *SinkVM {
+func NewSinkVM(script string, sinkID string) *SinkVM {
 	return &SinkVM{
 		script: script,
+		id:     sinkID,
 	}
 }
 
@@ -251,6 +253,42 @@ func (svm *SinkVM) getVM() (*LuaVM, error) {
 		lua.OpenLibraries(vm)
 		lualibs.RegisterLuaLibs(vm)
 
+		// Add logger functions
+		vm.PushGoFunction(func(l *lua.State) int {
+			msg, _ := l.ToString(-1)
+			logger.TraceContext("sink", svm.id, msg)
+			return 0
+		})
+		vm.SetGlobal("trace")
+
+		vm.PushGoFunction(func(l *lua.State) int {
+			msg, _ := l.ToString(-1)
+			logger.DebugContext("sink", svm.id, msg)
+			return 0
+		})
+		vm.SetGlobal("debug")
+
+		vm.PushGoFunction(func(l *lua.State) int {
+			msg, _ := l.ToString(-1)
+			logger.InfoContext("sink", svm.id, msg)
+			return 0
+		})
+		vm.SetGlobal("info")
+
+		vm.PushGoFunction(func(l *lua.State) int {
+			msg, _ := l.ToString(-1)
+			logger.WarnContext("sink", svm.id, msg)
+			return 0
+		})
+		vm.SetGlobal("warn")
+
+		vm.PushGoFunction(func(l *lua.State) int {
+			msg, _ := l.ToString(-1)
+			logger.ErrorContext("sink", svm.id, msg)
+			return 0
+		})
+		vm.SetGlobal("error")
+
 		if err := lua.DoString(vm, svm.script); err != nil {
 			// No need to explicitly close Lua VM as it will be garbage collected
 			return nil, fmt.Errorf("failed to load script: %v", err)
@@ -419,7 +457,7 @@ func setupSinks() {
 			if err != nil {
 				logger.Fatal("Failed to read transform script for sink %s: %v", sink.ID, err)
 			}
-			sink.vm = NewSinkVM(string(script))
+			sink.vm = NewSinkVM(string(script), sink.ID)
 		}
 
 		sinkChannels[sink.ID] = make(chan string, 100)

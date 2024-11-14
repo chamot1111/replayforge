@@ -332,17 +332,28 @@ func startStatusServer() {
 							}
 							return msg
 						}(lastMsg),
+						"recentLogs": logger.GetContextHistory("sink", sink.ID),
 					}
+				}
+			}
+
+			sourceDetails := make(map[string]map[string]interface{})
+			for _, source := range config.Sources {
+				var sourceConfig SourceConfig
+				json.Unmarshal(source, &sourceConfig)
+				sourceDetails[sourceConfig.ID] = map[string]interface{}{
+					"recentLogs": logger.GetContextHistory("source", sourceConfig.ID),
 				}
 			}
 
 			enc := json.NewEncoder(w)
 			enc.SetIndent("", "    ")
 			enc.Encode(map[string]interface{}{
-				"sources": stats.Sources,
-				"sinks":   stats.Sinks,
+				"sources":      stats.Sources,
+				"sinks":       stats.Sinks,
 				"sinkDetails": sinkDetails,
-				"uptime":  time.Since(stats.Started).String(),
+				"sourceDetails": sourceDetails,
+				"uptime":      time.Since(stats.Started).String(),
 			})
 		})
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

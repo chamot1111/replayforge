@@ -134,6 +134,41 @@ func setupSourceVM(sourceConfig SourceConfig) {
 	vm := lua.NewState()
 	lua.OpenLibraries(vm)
 	lualibs.RegisterLuaLibs(vm)
+	// Add logger functions to Lua VM with context pre-filled
+	vm.PushGoFunction(func(l *lua.State) int {
+		msg, _ := l.ToString(-1)
+		logger.TraceContext("source", sourceConfig.ID, msg)
+		return 0
+	})
+	vm.SetGlobal("trace")
+
+	vm.PushGoFunction(func(l *lua.State) int {
+		msg, _ := l.ToString(-1)
+		logger.DebugContext("source", sourceConfig.ID, msg)
+		return 0
+	})
+	vm.SetGlobal("debug")
+
+	vm.PushGoFunction(func(l *lua.State) int {
+		msg, _ := l.ToString(-1)
+		logger.InfoContext("source", sourceConfig.ID, msg)
+		return 0
+	})
+	vm.SetGlobal("info")
+
+	vm.PushGoFunction(func(l *lua.State) int {
+		msg, _ := l.ToString(-1)
+		logger.WarnContext("source", sourceConfig.ID, msg)
+		return 0
+	})
+	vm.SetGlobal("warn")
+
+	vm.PushGoFunction(func(l *lua.State) int {
+		msg, _ := l.ToString(-1)
+		logger.ErrorContext("source", sourceConfig.ID, msg)
+		return 0
+	})
+	vm.SetGlobal("error")
 
 	if sourceConfig.TransformScript != "" {
 		script, err := os.ReadFile(sourceConfig.TransformScript)

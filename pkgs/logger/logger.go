@@ -23,6 +23,15 @@ const (
 type logEntry struct {
 	message   string
 	timestamp time.Time
+	level     LogLevel
+}
+
+type contextLogEntry struct {
+	message     string
+	timestamp   time.Time
+	level       LogLevel
+	sinkOrSource string
+	id          string
 }
 
 var (
@@ -30,6 +39,7 @@ var (
 	mu             sync.Mutex
 	logger         *log.Logger
 	logHistory     map[LogLevel][]logEntry
+	contextHistory map[string][]contextLogEntry // key is "sinkOrSource:id"
 	warnCount      int64
 	errorCount     int64
 )
@@ -43,6 +53,7 @@ type Config struct {
 
 func init() {
 	logHistory = make(map[LogLevel][]logEntry)
+	contextHistory = make(map[string][]contextLogEntry)
 	// Configuration par défaut
 	Configure(Config{
 		Level:      "info",
@@ -93,6 +104,14 @@ func GetLogStats() (int64, int64) {
 	mu.Lock()
 	defer mu.Unlock()
 	return warnCount, errorCount
+}
+
+// GetContextHistory returns the last 10 messages for a given sink/source and id
+func GetContextHistory(sinkOrSource string, id string) []contextLogEntry {
+	mu.Lock()
+	defer mu.Unlock()
+	key := fmt.Sprintf("%s:%s", sinkOrSource, id)
+	return contextHistory[key]
 }
 
 // SetLogLevel permet de changer le niveau de log dynamiquement
@@ -165,7 +184,61 @@ func logMsg(level LogLevel, format string, v ...interface{}) {
 	}
 }
 
-// Fonctions publiques pour chaque niveau de log
+func logMsgWithContext(level LogLevel, sinkOrSource string, id string, format string, v ...interface{}) {
+	if level <= currentLogLevel {
+		msg := fmt.Sprintf(format, v...)
+		contextMsg := fmt.Sprintf("[%s:%s] %s", sinkOrSource, id, msg)
+
+		if !shouldLog(level, contextMsg) {
+			return
+		}
+
+		mu.Lock()
+		defer mu.Unlock()
+
+		// Store in context history
+		key := fmt.Sprintf("%s:%s", sinkOrSource, id)
+		entry := contextLogEntry{
+			message: msg,
+			timestamp: time.Now(),
+			level: level,
+			sinkOrSource: sinkOrSource,
+			id: id,
+		}
+
+		history := contextHistory[key]
+		if len(history) >= 10 {
+			history = append(history[1:], entry)
+		} else {
+			history = append(history, entry)
+		}
+		contextHistory[key] = history
+
+		if level == LogLevelWarn {
+			warnCount++
+		} else if level == LogLevelError {
+			errorCount++
+		}
+
+		var levelStr string
+		switch level {
+		case LogLevelTrace:
+			levelStr = "TRACE"
+		case LogLevelDebug:
+			levelStr = "DEBUG"
+		case LogLevelInfo:
+			levelStr = "INFO "
+		case LogLevelWarn:
+			levelStr = "WARN "
+		case LogLevelError:
+			levelStr = "ERROR"
+		}
+
+		logger.Printf("[%s] %s | %s", time.Now().Format("2006-01-02 15:04:05"), levelStr, contextMsg)
+	}
+}
+
+// Original logging functions
 func Trace(format string, v ...interface{}) {
 	logMsg(LogLevelTrace, format, v...)
 }
@@ -186,9 +259,35 @@ func Error(format string, v ...interface{}) {
 	logMsg(LogLevelError, format, v...)
 }
 
+// Contextual logging functions
+func TraceContext(sinkOrSource string, id string, format string, v ...interface{}) {
+	logMsgWithContext(LogLevelTrace, sinkOrSource, id, format, v...)
+}
+
+func DebugContext(sinkOrSource string, id string, format string, v ...interface{}) {
+	logMsgWithContext(LogLevelDebug, sinkOrSource, id, format, v...)
+}
+
+func InfoContext(sinkOrSource string, id string, format string, v ...interface{}) {
+	logMsgWithContext(LogLevelInfo, sinkOrSource, id, format, v...)
+}
+
+func WarnContext(sinkOrSource string, id string, format string, v ...interface{}) {
+	logMsgWithContext(LogLevelWarn, sinkOrSource, id, format, v...)
+}
+
+func ErrorContext(sinkOrSource string, id string, format string, v ...interface{}) {
+	logMsgWithContext(LogLevelError, sinkOrSource, id, format, v...)
+}
+
 // Fatal log le message et termine le programme
 func Fatal(format string, v ...interface{}) {
 	logMsg(LogLevelError, format, v...)
+	os.Exit(1)
+}
+
+func FatalContext(sinkOrSource string, id string, format string, v ...interface{}) {
+	logMsgWithContext(LogLevelError, sinkOrSource, id, format, v...)
 	os.Exit(1)
 }
 
