@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 	"fmt"
+	"github.com/chamot1111/replayforge/version"
 
 	"github.com/chamot1111/replayforge/pkgs/logger"
 	"github.com/shirou/gopsutil/v4/cpu"
@@ -234,6 +235,7 @@ func startStatusServer() {
 				"sources": sources,
 				"sinks":   sinks,
 				"uptime":  time.Since(stats.Started).String(),
+				"version": version.Version,
 			})
 		})
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
