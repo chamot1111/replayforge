@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"time"
+
 	"github.com/chamot1111/replayforge/pkgs/logger"
 )
 
@@ -55,13 +56,13 @@ func (l *LogFileSource) Start() error {
 	logger.DebugContext("source", l.ID, "Start %s", l.ID)
 	l.lastPosition = 0
 	go func() {
-        ticker := time.NewTicker(l.hookInterval)
-        defer ticker.Stop()
+		ticker := time.NewTicker(l.hookInterval)
+		defer ticker.Stop()
 
-        for range ticker.C {
-            l.readLogFile()
-        }
-    }()
+		for range ticker.C {
+			l.readLogFile()
+		}
+	}()
 	return nil
 }
 
@@ -75,11 +76,9 @@ func (l *LogFileSource) readLogFile() {
 	file, err := os.Open(l.FilePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			time.Sleep(l.hookInterval)
 			return
 		}
 		logger.ErrorContext("source", l.ID, "Failed to open log file %s: %v", l.FilePath, err)
-		time.Sleep(l.hookInterval)
 		return
 	}
 	defer file.Close()
@@ -87,7 +86,6 @@ func (l *LogFileSource) readLogFile() {
 	checksum, enoughLines, err := l.calculateChecksum(file)
 	if err != nil {
 		logger.ErrorContext("source", l.ID, "Failed to calculate checksum for %s: %v", l.FilePath, err)
-		time.Sleep(l.hookInterval)
 		return
 	}
 
