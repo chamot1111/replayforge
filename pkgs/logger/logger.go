@@ -18,6 +18,7 @@ const (
 	LogLevelDebug
 	LogLevelTrace
 	messageExpirationSeconds = 30
+	historyLength = 100
 )
 
 type logEntry struct {
@@ -208,7 +209,7 @@ func logMsgWithContext(level LogLevel, sinkOrSource string, id string, format st
 		}
 
 		history := contextHistory[key]
-		if len(history) >= 10 {
+		if len(history) >= historyLength {
 			history = append(history[1:], entry)
 		} else {
 			history = append(history, entry)

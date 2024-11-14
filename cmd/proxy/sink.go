@@ -216,6 +216,9 @@ func sendBatchContent(sink *Sink, contents []string, client *http.Client) error 
 		return fmt.Errorf("failed to send data to relay server: %s", string(body))
 	}
 
+	body, _ := io.ReadAll(resp.Body)
+	logger.DebugContext("sink", sink.ID, "Batch #%d response: status=%d, body=%s", sink.batchCounter, resp.StatusCode, string(body))
+
 	return nil
 }
 
