@@ -40,6 +40,7 @@ type Config struct {
 	PortStatusZ   int    `json:"portStatusZ"`
 	EnvName       string `json:"envName"`
 	HostName      string `json:"hostName"`
+	UseTsnetStatusZ      bool   `json:"useTsnetStatusZ"`
 }
 
 
@@ -83,6 +84,10 @@ func loadConfig() {
 
 	if err := json.Unmarshal(configData, &config); err != nil {
 		logger.Fatal("Failed to parse config JSON: %v", err)
+	}
+
+	if config.UseTsnetStatusZ && config.TsnetHostname == "" {
+		logger.Fatal("TsnetHostname must be set when UseTsnetStatusZ is true")
 	}
 
 	if config.HostName == "" {
