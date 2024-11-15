@@ -41,6 +41,7 @@ type Config struct {
 	EnvName       string `json:"envName"`
 	HostName      string `json:"hostName"`
 	UseTsnetStatusZ      bool   `json:"useTsnetStatusZ"`
+	EnablePprof   bool   `json:"enablePprof"`   // Enable pprof profiling
 }
 
 
@@ -61,7 +62,6 @@ func (bs *BaseSource) GetHookInterval() time.Duration {
 		return 0
 	}
 }
-
 
 func loadConfig() {
 	var configData []byte
@@ -89,6 +89,10 @@ func loadConfig() {
 
 	if config.UseTsnetStatusZ && config.TsnetHostname == "" {
 		logger.Fatal("TsnetHostname must be set when UseTsnetStatusZ is true")
+	}
+
+	if config.EnablePprof && config.PortStatusZ == 0 {
+		logger.Fatal("PortStatusZ must be set when EnablePprof is true")
 	}
 
 	if config.HostName == "" {
