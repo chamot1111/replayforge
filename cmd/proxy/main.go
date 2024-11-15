@@ -90,7 +90,7 @@ var rateLimitersMutex sync.RWMutex
 var (
 	sources             map[string]Source
 	configPath          string
-	heartbeatIntervalMs = 100
+	heartbeatIntervalMs = 1000
 	maxDbSize           = int64(10 * 1024 * 1024)
 	config              Config
 	vms                 map[string]*lua.State
