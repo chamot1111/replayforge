@@ -27,7 +27,7 @@ func setupSql(dbPath string, canVacuum bool, context string, contextID string) (
 		return db, errDbSize, true
 	}
 
-	logger.InfoContext(context, contextID, "Successfully opened database")
+	logger.DebugContext(context, contextID, "Successfully opened database")
 	return db, nil, false
 }
 
