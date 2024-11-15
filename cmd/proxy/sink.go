@@ -39,7 +39,7 @@ type Sink struct {
 	Config               SinkConfig `json:"config"`
 	vm                   *SinkVM
 	lastBatchTime        time.Time
-	batchCounter         int        // Added field to track batch count
+	batchCounter         int // Added field to track batch count
 }
 
 type LuaVM struct {
@@ -89,6 +89,7 @@ func sinkDbToRelayServer(sink Sink) error {
 	var idsToDelete []int
 	var batchContent []string
 	var batchSize int
+	var batchSent bool
 
 	var client *http.Client
 	if sink.UseTsnet && tsnetServer != nil {
@@ -122,8 +123,14 @@ func sinkDbToRelayServer(sink Sink) error {
 		batchSize += contentBytes
 		idsToDelete = append(idsToDelete, id)
 
-		if len(batchContent) >= maxEvents || batchSize >= goalBytes ||
-					(len(batchContent) > 0 && time.Since(sink.lastBatchTime) >= time.Duration(sink.GetBatchTimeoutSecs())*time.Second) {
+		shouldSend := false
+		if batchSize >= goalBytes {
+			shouldSend = true
+		} else if len(batchContent) >= maxEvents {
+			shouldSend = true
+		}
+
+		if shouldSend {
 			sink.batchCounter++
 			if err := sendBatchContent(&sink, batchContent, client); err != nil {
 				logger.ErrorContext("sink", sink.ID, "Failed to send batch content (batch #%d): %v", sink.batchCounter, err)
@@ -132,12 +139,26 @@ func sinkDbToRelayServer(sink Sink) error {
 			}
 			batchContent = nil
 			batchSize = 0
-			sink.lastBatchTime = time.Now()
+			batchSent = true
 		} else {
 			logger.DebugContext("sink", sink.ID, "Not sending batch yet (batch #%d): %d events, %d total size, waited %v/%d seconds (last batch time: %v)",
 				sink.batchCounter+1, len(batchContent), batchSize, time.Since(sink.lastBatchTime),
 				sink.GetBatchTimeoutSecs(), sink.lastBatchTime)
 		}
+	}
+
+	// Send any remaining messages that didn't reach goal size
+	if len(batchContent) > 0 && time.Since(sink.lastBatchTime) >= time.Duration(sink.GetBatchTimeoutSecs())*time.Second {
+		sink.batchCounter++
+		if err := sendBatchContent(&sink, batchContent, client); err != nil {
+			logger.ErrorContext("sink", sink.ID, "Failed to send final batch content (batch #%d): %v", sink.batchCounter, err)
+			idsToDelete = idsToDelete[len(batchContent):]
+			return err
+		}
+		batchSent = true
+	} else if len(batchContent) > 0 {
+		// If we don't send remaining messages, remove their IDs from deletion list
+		idsToDelete = idsToDelete[:len(idsToDelete)-len(batchContent)]
 	}
 
 	if len(idsToDelete) > 0 {
@@ -149,6 +170,9 @@ func sinkDbToRelayServer(sink Sink) error {
 		}
 	}
 
+	if batchSent {
+		sink.lastBatchTime = time.Now()
+	}
 	return nil
 }
 
