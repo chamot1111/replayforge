@@ -8,7 +8,7 @@ require (
 	github.com/Shopify/go-lua v0.0.0-20240527182111-9ab1540f3f5f
 	github.com/marcboeker/go-duckdb v1.8.2
 	github.com/vjeantet/grok v1.0.1
-	tailscale.com v1.76.1
+	tailscale.com v1.76.6
 )
 
 require (
