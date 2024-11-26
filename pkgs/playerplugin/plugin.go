@@ -8,6 +8,7 @@ type BaseSink struct {
 	ID         string `json:"id"`
 	Type       string `json:"type"`
 	Name string `json:"bucketName"`
+	Metadata map[string]interface{} `json:"metadata"`
 }
 
 type SinkConfig struct {

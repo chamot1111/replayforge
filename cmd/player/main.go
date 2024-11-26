@@ -52,6 +52,7 @@ type SinkConfig struct {
 	Type   string          `json:"type"`
 	ID     string          `json:"id"`
 	Params json.RawMessage `json:"params"`
+	Metadata          json.RawMessage `json:"metadata"`
 }
 
 var (
@@ -62,6 +63,7 @@ var (
 	relayUrl            string
 	sources             []Source
 	sinks               map[string]playerplugin.Sink
+	sinkConfigByName map[string]SinkConfig
 	sinkChannels        map[string]chan string
 	useTsnet            bool
 	tsnetHostname       string
@@ -71,6 +73,8 @@ var (
 	staticFolderPath     string
 	envName            string
 	hostName           string
+	portStatusZ        int
+	useTsnetStatusZ   bool
 )
 
 func timerHandler(sourceID string) {
@@ -185,6 +189,14 @@ func init() {
 		staticFolderPath = val
 	}
 
+	if val, ok := config["portStatusZ"].(float64); ok {
+		portStatusZ = int(val)
+	}
+
+	if val, ok := config["useTsnetStatusZ"].(bool); ok {
+		useTsnetStatusZ = val
+	}
+
 	var sourcesConfig []SourceConfig
 	if sourcesData, ok := config["sources"].([]interface{}); ok {
 		for _, sourceData := range sourcesData {
@@ -223,6 +235,7 @@ func init() {
 
 	sinks = make(map[string]playerplugin.Sink)
 	sinkChannels = make(map[string]chan string)
+	sinkConfigByName = make(map[string]SinkConfig)
 
 	for _, sc := range sinksConfig {
 		var sink playerplugin.Sink
@@ -250,8 +263,17 @@ func init() {
 				ID:   sc.ID,
 				Type: sc.Type,
 				Name: sc.Name,
+				Metadata: map[string]interface{}{},
 			},
 			Params: sc.Params,
+		}
+
+		if len(sc.Metadata) > 0 {
+			var metadata map[string]interface{}
+			if err := json.Unmarshal(sc.Metadata, &metadata); err != nil {
+				logger.Fatal("Failed to parse sink metadata: %v", err)
+			}
+			sinkConfig.BaseSink.Metadata = metadata
 		}
 
 		if err := sink.Init(sinkConfig); err != nil {
@@ -264,6 +286,7 @@ func init() {
 
 		sinks[sc.Name] = sink
 		sinkChannels[sc.Name] = make(chan string, 1000)
+		sinkConfigByName[sc.Name] = sc
 	}
 
 	for sinkName, _ := range sinks {
@@ -674,6 +697,26 @@ func main() {
 			} else {
 				http.NotFound(w, r)
 			}
+		})
+
+		mux.HandleFunc("/list", func(w http.ResponseWriter, r *http.Request) {
+			sinkList := make([]map[string]interface{}, 0)
+			for id, sinkConfig := range sinkConfigByName {
+				sinkInfo := map[string]interface{}{
+					"id":       id,
+					"type":     sinkConfig.Type,
+					"metadata": map[string]interface{}{},
+				}
+				if len(sinkConfig.Metadata) > 0 {
+					var metadata map[string]interface{}
+					if err := json.Unmarshal(sinkConfig.Metadata, &metadata); err == nil {
+						sinkInfo["metadata"] = metadata
+					}
+				}
+				sinkList = append(sinkList, sinkInfo)
+			}
+
+			json.NewEncoder(w).Encode(sinkList)
 		})
 
 		go func() {

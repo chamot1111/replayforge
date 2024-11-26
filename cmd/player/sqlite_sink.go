@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -18,11 +19,11 @@ import (
 type TimeseriesType string
 
 const (
-	GaugeType     TimeseriesType = "gauge"
-	CounterType   TimeseriesType = "counter"
-	RollupType    TimeseriesType = "rollup"
-	DeltaType     TimeseriesType = "delta"
-	SnapshotType  TimeseriesType = "snapshot"
+	GaugeType    TimeseriesType = "gauge"
+	CounterType  TimeseriesType = "counter"
+	RollupType   TimeseriesType = "rollup"
+	DeltaType    TimeseriesType = "delta"
+	SnapshotType TimeseriesType = "snapshot"
 )
 
 type TimeseriesConfig struct {
@@ -32,15 +33,15 @@ type TimeseriesConfig struct {
 }
 
 type SqliteSink struct {
-	DB                *sql.DB
-	TableSchemas      map[string]map[string]string
-	TimeseriesTables  map[string]TimeseriesConfig
-	ListenAddr        string
-	StaticDir         string
-	ID                string
-	ExposedPort       int
-	RowTTLSec         int64
-	DBPath            string
+	DB               *sql.DB
+	TableSchemas     map[string]map[string]string
+	TimeseriesTables map[string]TimeseriesConfig
+	ListenAddr       string
+	StaticDir        string
+	ID               string
+	ExposedPort      int
+	RowTTLSec        int64
+	DBPath           string
 }
 
 func (s *SqliteSink) registerTimeseriesTable(tableName string, parts []string) error {
@@ -204,9 +205,68 @@ func (s *SqliteSink) Init(config playerplugin.SinkConfig) error {
 	return nil
 }
 
+func (s *SqliteSink) handleListTables(w http.ResponseWriter, r *http.Request) {
+	query := `SELECT name FROM sqlite_schema WHERE type='table'`
+	rows, err := s.DB.Query(query)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Error listing tables: %v", err), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var tables []string
+	for rows.Next() {
+		var tableName string
+		if err := rows.Scan(&tableName); err != nil {
+			http.Error(w, fmt.Sprintf("Error scanning table name: %v", err), http.StatusInternalServerError)
+			return
+		}
+		tables = append(tables, tableName)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(tables)
+}
+
+func (s *SqliteSink) handleListColumns(w http.ResponseWriter, r *http.Request) {
+	tableName := strings.TrimPrefix(r.URL.Path, fmt.Sprintf("/%s/columns/", s.ID))
+	if tableName == "" {
+		http.Error(w, "Table name is required", http.StatusBadRequest)
+		return
+	}
+
+	query := fmt.Sprintf("PRAGMA table_info(%s)", tableName)
+	rows, err := s.DB.Query(query)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Error getting table columns: %v", err), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var columns []string
+	for rows.Next() {
+		var cid int
+		var name, dataType string
+		var notNull, pk int
+		var dfltValue interface{}
+		if err := rows.Scan(&cid, &name, &dataType, &notNull, &dfltValue, &pk); err != nil {
+			http.Error(w, fmt.Sprintf("Error scanning column info: %v", err), http.StatusInternalServerError)
+			return
+		}
+		columns = append(columns, name)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(columns)
+}
+
 func (s *SqliteSink) Start() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc(fmt.Sprintf("/%s/rpf-db/", s.ID), s.handleGetRequest)
+	mux.HandleFunc(fmt.Sprintf("/%s/query-table/", s.ID), s.handleGetRequest)
+	mux.HandleFunc(fmt.Sprintf("/%s/list", s.ID), s.handleListTables)
+	mux.HandleFunc(fmt.Sprintf("/%s/columns/", s.ID), s.handleListColumns)
+
 	if s.StaticDir != "" {
 		mux.Handle(fmt.Sprintf("/%s/static/", s.ID), http.StripPrefix(fmt.Sprintf("/%s/static/", s.ID), http.FileServer(http.Dir(s.StaticDir))))
 	}
@@ -321,7 +381,7 @@ func (s *SqliteSink) ensureColumnExists(table, column, dataType string) error {
 		}
 		s.TableSchemas[table][column] = dataType
 
-		if strings.HasSuffix(column, "idx") || strings.HasSuffix(column, "index") || strings.HasSuffix(column, "id") {
+		if strings.HasSuffix(column, "idx") || strings.HasSuffix(column, "index") || strings.HasSuffix(column, "id") || strings.HasSuffix(column, "fk") {
 			indexQuery := fmt.Sprintf("CREATE INDEX IF NOT EXISTS idx_%s_%s ON %s(%s)",
 				table, column, table, column)
 			_, err = s.DB.Exec(indexQuery)
@@ -332,6 +392,7 @@ func (s *SqliteSink) ensureColumnExists(table, column, dataType string) error {
 	}
 	return nil
 }
+
 func (s *SqliteSink) handlePost(table string, body []byte) error {
 	var data map[string]interface{}
 	err := json.Unmarshal(body, &data)
@@ -352,82 +413,82 @@ func (s *SqliteSink) handlePost(table string, body []byte) error {
 			data["timestamp"] = timestamp
 
 			switch tsConfig.Type {
-				case CounterType:
-					if value, ok := data["value"]; ok {
-						var currentCount int64 = 0
-						row := s.DB.QueryRow(fmt.Sprintf("SELECT count FROM %s WHERE timestamp = ?", table), data["timestamp"])
-						err := row.Scan(&currentCount)
-						if err != nil {
-							if err == sql.ErrNoRows {
-								data["count"] = int64(value.(float64))
-							} else {
-								return fmt.Errorf("failed to query current count: %v", err)
-							}
+			case CounterType:
+				if value, ok := data["value"]; ok {
+					var currentCount int64 = 0
+					row := s.DB.QueryRow(fmt.Sprintf("SELECT count FROM %s WHERE timestamp = ?", table), data["timestamp"])
+					err := row.Scan(&currentCount)
+					if err != nil {
+						if err == sql.ErrNoRows {
+							data["count"] = int64(value.(float64))
 						} else {
-							data["count"] = currentCount + int64(value.(float64))
+							return fmt.Errorf("failed to query current count: %v", err)
 						}
-						data["increment"] = value
+					} else {
+						data["count"] = currentCount + int64(value.(float64))
 					}
-				case RollupType:
-					if value, ok := data["value"]; ok {
-						var min, max, sum float64 = 0, 0, 0
-						var count int64 = 0
-						row := s.DB.QueryRow(fmt.Sprintf("SELECT min, max, avg * count, count FROM %s WHERE timestamp = ?", table), data["timestamp"])
-						err := row.Scan(&min, &max, &sum, &count)
-						if err != nil {
-							if err == sql.ErrNoRows {
-								data["min"] = value
-								data["max"] = value
-								data["avg"] = value
-								data["count"] = 1
-							} else {
-								return fmt.Errorf("failed to query rollup values: %v", err)
-							}
+					data["increment"] = value
+				}
+			case RollupType:
+				if value, ok := data["value"]; ok {
+					var min, max, sum float64 = 0, 0, 0
+					var count int64 = 0
+					row := s.DB.QueryRow(fmt.Sprintf("SELECT min, max, avg * count, count FROM %s WHERE timestamp = ?", table), data["timestamp"])
+					err := row.Scan(&min, &max, &sum, &count)
+					if err != nil {
+						if err == sql.ErrNoRows {
+							data["min"] = value
+							data["max"] = value
+							data["avg"] = value
+							data["count"] = 1
 						} else {
-							v := value.(float64)
-							if v < min {
-								data["min"] = v
-							} else {
-								data["min"] = min
-							}
-							if v > max {
-								data["max"] = v
-							} else {
-								data["max"] = max
-							}
-							data["avg"] = (sum + v) / float64(count+1)
-							data["count"] = count + 1
+							return fmt.Errorf("failed to query rollup values: %v", err)
 						}
-					}
-				case DeltaType:
-					if value, ok := data["value"]; ok {
-						var previousValue float64 = 0
-						row := s.DB.QueryRow(fmt.Sprintf("SELECT current_value FROM %s WHERE timestamp = (SELECT MAX(timestamp) FROM %s WHERE timestamp < ?)", table, table), data["timestamp"])
-						err := row.Scan(&previousValue)
-						if err != nil && err != sql.ErrNoRows {
-							return fmt.Errorf("failed to query previous value: %v", err)
-						}
-						currentValue := value.(float64)
-						data["previous_value"] = previousValue
-						data["current_value"] = currentValue
-						data["delta"] = currentValue - previousValue
-					}
-				case SnapshotType:
-					if value, ok := data["value"]; ok {
-						var count int64 = 0
-						row := s.DB.QueryRow(fmt.Sprintf("SELECT count FROM %s WHERE timestamp = ? AND value = ?", table), data["timestamp"], value)
-						err := row.Scan(&count)
-						if err != nil {
-							if err == sql.ErrNoRows {
-								data["count"] = 1
-							} else {
-								return fmt.Errorf("failed to query snapshot count: %v", err)
-							}
+					} else {
+						v := value.(float64)
+						if v < min {
+							data["min"] = v
 						} else {
-							data["count"] = count + 1
+							data["min"] = min
 						}
+						if v > max {
+							data["max"] = v
+						} else {
+							data["max"] = max
+						}
+						data["avg"] = (sum + v) / float64(count+1)
+						data["count"] = count + 1
 					}
 				}
+			case DeltaType:
+				if value, ok := data["value"]; ok {
+					var previousValue float64 = 0
+					row := s.DB.QueryRow(fmt.Sprintf("SELECT current_value FROM %s WHERE timestamp = (SELECT MAX(timestamp) FROM %s WHERE timestamp < ?)", table, table), data["timestamp"])
+					err := row.Scan(&previousValue)
+					if err != nil && err != sql.ErrNoRows {
+						return fmt.Errorf("failed to query previous value: %v", err)
+					}
+					currentValue := value.(float64)
+					data["previous_value"] = previousValue
+					data["current_value"] = currentValue
+					data["delta"] = currentValue - previousValue
+				}
+			case SnapshotType:
+				if value, ok := data["value"]; ok {
+					var count int64 = 0
+					row := s.DB.QueryRow(fmt.Sprintf("SELECT count FROM %s WHERE timestamp = ? AND value = ?", table), data["timestamp"], value)
+					err := row.Scan(&count)
+					if err != nil {
+						if err == sql.ErrNoRows {
+							data["count"] = 1
+						} else {
+							return fmt.Errorf("failed to query snapshot count: %v", err)
+						}
+					} else {
+						data["count"] = count + 1
+					}
+				}
+			}
 		}
 	} else {
 		if _, ok := data["id"]; !ok {
@@ -496,12 +557,13 @@ func (s *SqliteSink) handleDelete(table string, body []byte) error {
 	}
 	return nil
 }
-
 func (s *SqliteSink) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 	table := strings.TrimPrefix(r.URL.Path, fmt.Sprintf("/%s/rpf-db/", s.ID))
+	table = strings.TrimPrefix(table, fmt.Sprintf("/%s/query-table/", s.ID))
 	query := fmt.Sprintf("SELECT * FROM %s", table)
 
-	whereClause := ""
+	var conditions []string
+	var args []interface{}
 	orderByClause := ""
 	limitClause := ""
 
@@ -511,16 +573,28 @@ func (s *SqliteSink) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 		} else if key == "limit" {
 			limitClause = fmt.Sprintf(" LIMIT %s", values[0])
 		} else {
-			if whereClause == "" {
-				whereClause = " WHERE "
+			sanitizedKey := sanitizeIdentifier(key)
+			if strings.HasSuffix(key, "_contains") {
+				conditions = append(conditions, fmt.Sprintf("%s LIKE ?", strings.TrimSuffix(sanitizedKey, "_contains")))
+				args = append(args, fmt.Sprintf("%%%s%%", values[0]))
+			} else if strings.HasSuffix(key, "_gt") {
+				castedValue, castPlaceholder := s.castValue(table, strings.TrimSuffix(sanitizedKey, "_gt"), values[0])
+				conditions = append(conditions, fmt.Sprintf("%s > %s", strings.TrimSuffix(sanitizedKey, "_gt"), castPlaceholder))
+				args = append(args, castedValue)
+			} else if strings.HasSuffix(key, "_lt") {
+				castedValue, castPlaceholder := s.castValue(table, strings.TrimSuffix(sanitizedKey, "_lt"), values[0])
+				conditions = append(conditions, fmt.Sprintf("%s < %s", strings.TrimSuffix(sanitizedKey, "_lt"), castPlaceholder))
+				args = append(args, castedValue)
 			} else {
-				whereClause += " AND "
+				conditions = append(conditions, fmt.Sprintf("%s = ?", sanitizedKey))
+				args = append(args, values[0])
 			}
-			whereClause += fmt.Sprintf("%s = ?", key)
-			query += whereClause
 		}
 	}
 
+	if len(conditions) > 0 {
+		query += " WHERE " + strings.Join(conditions, " AND ")
+	}
 	query += orderByClause + limitClause
 
 	stmt, err := s.DB.Prepare(query)
@@ -531,14 +605,7 @@ func (s *SqliteSink) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	defer stmt.Close()
 
-	var queryArgs []interface{}
-	for key, values := range r.URL.Query() {
-		if key != "order" && key != "limit" {
-			queryArgs = append(queryArgs, values[0])
-		}
-	}
-
-	rows, err := stmt.Query(queryArgs...)
+	rows, err := stmt.Query(args...)
 	if err != nil {
 		logger.Error("Error querying table: %v", err)
 		http.Error(w, fmt.Sprintf("Error querying table: %v", err), http.StatusInternalServerError)
@@ -583,7 +650,36 @@ func (s *SqliteSink) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-SQL-Query", query)
 	json.NewEncoder(w).Encode(result)
+}
+
+func (s *SqliteSink) castValue(table, column, value string) (interface{}, string) {
+	dataType, exists := s.TableSchemas[table][column]
+	if !exists {
+		return value, "?"
+	}
+
+	switch dataType {
+	case "INTEGER":
+		if i, err := strconv.Atoi(value); err == nil {
+			return i, "?"
+		}
+	case "REAL":
+		if f, err := strconv.ParseFloat(value, 64); err == nil {
+			return f, "?"
+		}
+	case "DATETIME":
+		return value, "DATETIME(?)"
+	}
+
+	return value, "?"
+}
+
+func sanitizeIdentifier(input string) string {
+	// Only allow alphanumeric characters and underscores
+	reg := regexp.MustCompile(`[^a-zA-Z0-9_]`)
+	return reg.ReplaceAllString(input, "")
 }
 
 func (s *SqliteSink) loadTableSchemas() {
