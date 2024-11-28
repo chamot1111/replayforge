@@ -699,7 +699,7 @@ func main() {
 			}
 		})
 
-		mux.HandleFunc("/list", func(w http.ResponseWriter, r *http.Request) {
+		mux.HandleFunc("/sink/list", func(w http.ResponseWriter, r *http.Request) {
 			sinkList := make([]map[string]interface{}, 0)
 			for id, sinkConfig := range sinkConfigByName {
 				sinkInfo := map[string]interface{}{
@@ -717,6 +717,34 @@ func main() {
 			}
 
 			json.NewEncoder(w).Encode(sinkList)
+		})
+
+		mux.HandleFunc("/sink/find/", func(w http.ResponseWriter, r *http.Request) {
+			id := strings.TrimPrefix(r.URL.Path, "/sink/find/")
+			if id == "" {
+				http.Error(w, "id parameter is required", http.StatusBadRequest)
+				return
+			}
+
+			for _, sinkConfig := range sinkConfigByName {
+				if sinkConfig.ID == id {
+					sinkInfo := map[string]interface{}{
+						"id":       sinkConfig.ID,
+						"type":     sinkConfig.Type,
+						"metadata": map[string]interface{}{},
+					}
+					if len(sinkConfig.Metadata) > 0 {
+						var metadata map[string]interface{}
+						if err := json.Unmarshal(sinkConfig.Metadata, &metadata); err == nil {
+							sinkInfo["metadata"] = metadata
+						}
+					}
+					json.NewEncoder(w).Encode(sinkInfo)
+					return
+				}
+			}
+
+			http.Error(w, "Sink not found", http.StatusNotFound)
 		})
 
 		go func() {

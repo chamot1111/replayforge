@@ -265,6 +265,45 @@ func (s *SqliteSink) handleListColumns(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(columns)
 }
 
+func (s *SqliteSink) handleDisinctValuesForTableColumns(w http.ResponseWriter, r *http.Request) {
+ pathParts := strings.Split(r.URL.Path, "/")
+ if len(pathParts) < 3 {
+  http.Error(w, "Invalid path format", http.StatusBadRequest)
+  return
+ }
+
+ table := pathParts[len(pathParts)-2]
+ column := pathParts[len(pathParts)-1]
+
+ query := fmt.Sprintf("SELECT DISTINCT %s FROM %s", column, table)
+
+ rows, err := s.DB.Query(query)
+ if err != nil {
+  http.Error(w, fmt.Sprintf("Error querying distinct values: %v", err), http.StatusInternalServerError)
+  return
+ }
+ defer rows.Close()
+
+ var values []interface{}
+ for rows.Next() {
+  var value interface{}
+  if err := rows.Scan(&value); err != nil {
+   http.Error(w, fmt.Sprintf("Error scanning value: %v", err), http.StatusInternalServerError)
+   return
+  }
+
+  // Convert []byte to string if necessary
+  if b, ok := value.([]byte); ok {
+   value = string(b)
+  }
+
+  values = append(values, value)
+ }
+
+ w.Header().Set("Content-Type", "application/json")
+ json.NewEncoder(w).Encode(values)
+}
+
 func (s *SqliteSink) handleListAllTablesColumns(w http.ResponseWriter, r *http.Request) {
 	tableRows, err := s.DB.Query("SELECT name FROM sqlite_schema WHERE type='table'")
 	if err != nil {
@@ -317,6 +356,8 @@ func (s *SqliteSink) Start() error {
 	mux.HandleFunc(fmt.Sprintf("/%s/list", s.ID), s.handleListTables)
 	mux.HandleFunc(fmt.Sprintf("/%s/columns/", s.ID), s.handleListColumns)
 	mux.HandleFunc(fmt.Sprintf("/%s/all-columns/", s.ID), s.handleListAllTablesColumns)
+	mux.HandleFunc(fmt.Sprintf("/%s/distinct-values/", s.ID), s.handleDisinctValuesForTableColumns)
+
 
 	if s.StaticDir != "" {
 		mux.Handle(fmt.Sprintf("/%s/static/", s.ID), http.StripPrefix(fmt.Sprintf("/%s/static/", s.ID), http.FileServer(http.Dir(s.StaticDir))))
