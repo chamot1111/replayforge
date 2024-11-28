@@ -42,6 +42,7 @@ type SqliteSink struct {
 	ExposedPort      int
 	RowTTLSec        int64
 	DBPath           string
+	LastRpfID        int64
 }
 
 func (s *SqliteSink) registerTimeseriesTable(tableName string, parts []string) error {
@@ -135,6 +136,16 @@ func (s *SqliteSink) registerTimeseriesTable(tableName string, parts []string) e
 		return fmt.Errorf("failed to create cleanup trigger: %v", err)
 	}
 
+	err = s.ensureColumnExists(tableName, "_rpf_id", "INTEGER")
+	if err != nil {
+		return fmt.Errorf("failed to add _rpf_id column: %v", err)
+	}
+
+	err = s.ensureColumnExists(tableName, "_rpf_last_updated_idx", "INTEGER")
+	if err != nil {
+		return fmt.Errorf("failed to add _rpf_last_updated_idx column: %v", err)
+	}
+
 	s.TimeseriesTables[tableName] = TimeseriesConfig{
 		Type:      tsType,
 		TableName: tableName,
@@ -195,11 +206,27 @@ func (s *SqliteSink) Init(config playerplugin.SinkConfig) error {
 	s.TableSchemas = make(map[string]map[string]string)
 	s.TimeseriesTables = make(map[string]TimeseriesConfig)
 	s.loadTableSchemas()
+	s.LastRpfID = 0
 
 	for table := range s.TableSchemas {
 		err = s.ensureColumnExists(table, "_rpf_last_updated_idx", "INTEGER")
 		if err != nil {
 			return fmt.Errorf("failed to add _rpf_last_updated_idx column: %v", err)
+		}
+		err = s.ensureColumnExists(table, "_rpf_id", "INTEGER")
+		if err != nil {
+			return fmt.Errorf("failed to add _rpf_id column: %v", err)
+		}
+
+		// Get max _rpf_id for table
+		var maxID sql.NullInt64
+		row := s.DB.QueryRow(fmt.Sprintf("SELECT MAX(_rpf_id) FROM %s", table))
+		err = row.Scan(&maxID)
+		if err != nil {
+			return fmt.Errorf("failed to get max _rpf_id: %v", err)
+		}
+		if maxID.Valid && maxID.Int64 > s.LastRpfID {
+			s.LastRpfID = maxID.Int64
 		}
 	}
 
@@ -266,42 +293,42 @@ func (s *SqliteSink) handleListColumns(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *SqliteSink) handleDisinctValuesForTableColumns(w http.ResponseWriter, r *http.Request) {
- pathParts := strings.Split(r.URL.Path, "/")
- if len(pathParts) < 3 {
-  http.Error(w, "Invalid path format", http.StatusBadRequest)
-  return
- }
+	pathParts := strings.Split(r.URL.Path, "/")
+	if len(pathParts) < 3 {
+		http.Error(w, "Invalid path format", http.StatusBadRequest)
+		return
+	}
 
- table := pathParts[len(pathParts)-2]
- column := pathParts[len(pathParts)-1]
+	table := pathParts[len(pathParts)-2]
+	column := pathParts[len(pathParts)-1]
 
- query := fmt.Sprintf("SELECT DISTINCT %s FROM %s", column, table)
+	query := fmt.Sprintf("SELECT DISTINCT %s FROM %s", column, table)
 
- rows, err := s.DB.Query(query)
- if err != nil {
-  http.Error(w, fmt.Sprintf("Error querying distinct values: %v", err), http.StatusInternalServerError)
-  return
- }
- defer rows.Close()
+	rows, err := s.DB.Query(query)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Error querying distinct values: %v", err), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
 
- var values []interface{}
- for rows.Next() {
-  var value interface{}
-  if err := rows.Scan(&value); err != nil {
-   http.Error(w, fmt.Sprintf("Error scanning value: %v", err), http.StatusInternalServerError)
-   return
-  }
+	var values []interface{}
+	for rows.Next() {
+		var value interface{}
+		if err := rows.Scan(&value); err != nil {
+			http.Error(w, fmt.Sprintf("Error scanning value: %v", err), http.StatusInternalServerError)
+			return
+		}
 
-  // Convert []byte to string if necessary
-  if b, ok := value.([]byte); ok {
-   value = string(b)
-  }
+		// Convert []byte to string if necessary
+		if b, ok := value.([]byte); ok {
+			value = string(b)
+		}
 
-  values = append(values, value)
- }
+		values = append(values, value)
+	}
 
- w.Header().Set("Content-Type", "application/json")
- json.NewEncoder(w).Encode(values)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(values)
 }
 
 func (s *SqliteSink) handleListAllTablesColumns(w http.ResponseWriter, r *http.Request) {
@@ -460,6 +487,11 @@ func (s *SqliteSink) ensureTableExists(table string) error {
 			return fmt.Errorf("failed to add _rpf_last_updated_idx column: %v", err)
 		}
 
+		err = s.ensureColumnExists(table, "_rpf_id", "INTEGER")
+		if err != nil {
+			return fmt.Errorf("failed to add _rpf_id column: %v", err)
+		}
+
 	}
 	return nil
 }
@@ -491,6 +523,10 @@ func (s *SqliteSink) handlePost(table string, body []byte) error {
 	if err != nil {
 		return fmt.Errorf("failed to unmarshal JSON: %v", err)
 	}
+
+	data["_rpf_last_updated_idx"] = time.Now().Unix()
+	s.LastRpfID++
+	data["_rpf_id"] = s.LastRpfID
 
 	if strings.HasPrefix(table, "ts_") {
 		timestamp := time.Now().Unix()
@@ -590,7 +626,6 @@ func (s *SqliteSink) handlePost(table string, body []byte) error {
 		if _, ok := data["id"]; !ok {
 			return fmt.Errorf("id is mandatory")
 		}
-		data["_rpf_last_updated_idx"] = time.Now().Unix()
 	}
 
 	columns := make([]string, 0, len(data))
@@ -718,15 +753,22 @@ func (s *SqliteSink) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 	table := strings.TrimPrefix(r.URL.Path, fmt.Sprintf("/%s/rpf-db/", s.ID))
 	table = strings.TrimPrefix(table, fmt.Sprintf("/%s/query-table/", s.ID))
 	query := fmt.Sprintf("SELECT * FROM %s", table)
-
 	var conditions []string
 	var args []interface{}
-	orderByClause := ""
-	limitClause := ""
+	orderByClause := " ORDER BY _rpf_id"  // Default order
+	limitClause := " LIMIT 10000" // Default limit
 
 	for key, values := range r.URL.Query() {
 		if key == "order" {
-			orderByClause = fmt.Sprintf(" ORDER BY %s", values[0])
+			parts := strings.Split(values[0], ":")
+			if len(parts) == 2 {
+				direction := strings.ToUpper(parts[1])
+				if direction == "ASC" || direction == "DESC" {
+					orderByClause = fmt.Sprintf(" ORDER BY %s %s", parts[0], direction)
+				}
+			} else {
+				orderByClause = fmt.Sprintf(" ORDER BY %s", values[0])
+			}
 		} else if key == "limit" {
 			limitClause = fmt.Sprintf(" LIMIT %s", values[0])
 		} else {
