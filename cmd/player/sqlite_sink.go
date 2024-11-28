@@ -61,44 +61,49 @@ func (s *SqliteSink) registerTimeseriesTable(tableName string, parts []string) e
 	case GaugeType:
 		query = fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (
 			timestamp INTEGER NOT NULL,
+			serie_name TEXT NOT NULL,
 			value REAL,
 			metadata JSON,
-			PRIMARY KEY (timestamp)
+			PRIMARY KEY (timestamp, serie_name)
 		)`, tableName)
 	case CounterType:
 		query = fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (
 			timestamp INTEGER NOT NULL,
+			serie_name TEXT NOT NULL,
 			count INTEGER,
 			increment INTEGER,
 			metadata JSON,
-			PRIMARY KEY (timestamp)
+			PRIMARY KEY (timestamp, serie_name)
 		)`, tableName)
 	case RollupType:
 		query = fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (
 			timestamp INTEGER NOT NULL,
+			serie_name TEXT NOT NULL,
 			min REAL,
 			max REAL,
 			avg REAL,
 			count INTEGER,
 			metadata JSON,
-			PRIMARY KEY (timestamp)
+			PRIMARY KEY (timestamp, serie_name)
 		)`, tableName)
 	case DeltaType:
 		query = fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (
 			timestamp INTEGER NOT NULL,
+			serie_name TEXT NOT NULL,
 			previous_value REAL,
 			current_value REAL,
 			delta REAL,
 			metadata JSON,
-			PRIMARY KEY (timestamp)
+			PRIMARY KEY (timestamp, serie_name)
 		)`, tableName)
 	case SnapshotType:
 		query = fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (
 			timestamp INTEGER NOT NULL,
+			serie_name TEXT NOT NULL,
 			value TEXT,
 			count INTEGER,
 			metadata JSON,
-			PRIMARY KEY (timestamp, value)
+			PRIMARY KEY (timestamp, serie_name, value)
 		)`, tableName)
 	default:
 		return fmt.Errorf("unknown timeseries type: %s", tsType)
@@ -458,11 +463,15 @@ func (s *SqliteSink) handlePost(table string, body []byte) error {
 			timestamp = (timestamp / interval) * interval
 			data["timestamp"] = timestamp
 
+			if _, ok := data["serie_name"]; !ok {
+				data["serie_name"] = "default"
+			}
+
 			switch tsConfig.Type {
 			case CounterType:
 				if value, ok := data["value"]; ok {
 					var currentCount int64 = 0
-					row := s.DB.QueryRow(fmt.Sprintf("SELECT count FROM %s WHERE timestamp = ?", table), data["timestamp"])
+					row := s.DB.QueryRow(fmt.Sprintf("SELECT count FROM %s WHERE timestamp = ? AND serie_name = ?", table), data["timestamp"], data["serie_name"])
 					err := row.Scan(&currentCount)
 					if err != nil {
 						if err == sql.ErrNoRows {
@@ -479,7 +488,7 @@ func (s *SqliteSink) handlePost(table string, body []byte) error {
 				if value, ok := data["value"]; ok {
 					var min, max, sum float64 = 0, 0, 0
 					var count int64 = 0
-					row := s.DB.QueryRow(fmt.Sprintf("SELECT min, max, avg * count, count FROM %s WHERE timestamp = ?", table), data["timestamp"])
+					row := s.DB.QueryRow(fmt.Sprintf("SELECT min, max, avg * count, count FROM %s WHERE timestamp = ? AND serie_name = ?", table), data["timestamp"], data["serie_name"])
 					err := row.Scan(&min, &max, &sum, &count)
 					if err != nil {
 						if err == sql.ErrNoRows {
@@ -509,7 +518,7 @@ func (s *SqliteSink) handlePost(table string, body []byte) error {
 			case DeltaType:
 				if value, ok := data["value"]; ok {
 					var previousValue float64 = 0
-					row := s.DB.QueryRow(fmt.Sprintf("SELECT current_value FROM %s WHERE timestamp = (SELECT MAX(timestamp) FROM %s WHERE timestamp < ?)", table, table), data["timestamp"])
+					row := s.DB.QueryRow(fmt.Sprintf("SELECT current_value FROM %s WHERE serie_name = ? AND timestamp = (SELECT MAX(timestamp) FROM %s WHERE timestamp < ? AND serie_name = ?)", table, table), data["serie_name"], data["timestamp"], data["serie_name"])
 					err := row.Scan(&previousValue)
 					if err != nil && err != sql.ErrNoRows {
 						return fmt.Errorf("failed to query previous value: %v", err)
@@ -522,7 +531,7 @@ func (s *SqliteSink) handlePost(table string, body []byte) error {
 			case SnapshotType:
 				if value, ok := data["value"]; ok {
 					var count int64 = 0
-					row := s.DB.QueryRow(fmt.Sprintf("SELECT count FROM %s WHERE timestamp = ? AND value = ?", table), data["timestamp"], value)
+					row := s.DB.QueryRow(fmt.Sprintf("SELECT count FROM %s WHERE timestamp = ? AND serie_name = ? AND value = ?", table), data["timestamp"], data["serie_name"], value)
 					err := row.Scan(&count)
 					if err != nil {
 						if err == sql.ErrNoRows {

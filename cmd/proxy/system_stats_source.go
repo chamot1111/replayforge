@@ -71,62 +71,60 @@ func (s *SystemStatsSource) collectStats() {
                 logger.ErrorContext("source", s.ID, "Failed to get CPU stats: %v", err)
                 continue
             }
-            stats := struct {
-                Timestamp        time.Time `json:"timestamp"`
-                MemoryProcess   float64   `json:"memoryProcess"`
-                MemoryHostTotal float64   `json:"memoryHostTotal"`
-                MemoryHostFree  float64   `json:"memoryHostFree"`
-                MemoryHostUsed  float64   `json:"memoryHostUsedPct"`
-                CpuPercent      float64   `json:"cpuPercentHost"`
-                NumGoroutines   int       `json:"numGoroutines"`
-                GcPauseNs      uint64    `json:"gcPauseNs"`
-                EnvName        string    `json:"envName"`
-                HostName       string    `json:"hostName"`
-            }{
-                Timestamp:       time.Now(),
-                MemoryProcess:   float64(memStats.Alloc),
-                MemoryHostTotal: float64(v.Total),
-                MemoryHostFree:  float64(v.Free),
-                MemoryHostUsed:  v.UsedPercent,
-                CpuPercent:      c[0],
-                NumGoroutines:   runtime.NumGoroutine(),
-                GcPauseNs:       memStats.PauseNs[(memStats.NumGC+255)%256],
-                EnvName:         config.EnvName,
-                HostName:        config.HostName,
+            now := time.Now()
+            stats := map[string]interface{}{
+                "timestamp": now,
+                "envName": config.EnvName,
+                "hostName": config.HostName,
             }
 
-            bodyJSON, err := json.Marshal(stats)
-            if err != nil {
-                logger.ErrorContext("source", s.ID, "Error marshaling stats: %v", err)
-                continue
+            metrics := map[string]float64{
+                "memory_process":    float64(memStats.Alloc),
+                "memory_host_total": float64(v.Total),
+                "memory_host_free":  float64(v.Free),
+                "memory_host_used":  v.UsedPercent,
+                "cpu_percent":       c[0],
+                "num_goroutines":    float64(runtime.NumGoroutine()),
+                "gc_pause_ns":       float64(memStats.PauseNs[(memStats.NumGC+255)%256]),
             }
 
-            wrapCallObject := map[string]interface{}{
-                "ip":      "127.0.0.1",
-                "path":    fmt.Sprintf("ts_gauge_systemstats_%ds", int(s.Interval.Seconds())),
-                "params":  map[string]string{},
-                "headers": map[string]string{"Content-Type": "application/json"},
-                "body":    string(bodyJSON),
-                "method":  "POST",
-            }
+            for serieName, value := range metrics {
+                stats["value"] = value
+                stats["serieName"] = serieName
 
-            jsonContent, err := json.Marshal(wrapCallObject)
-            if err != nil {
-                logger.ErrorContext("source", s.ID, "Error marshaling JSON: %v", err)
-                continue
-            }
+                bodyJSON, err := json.Marshal(stats)
+                if err != nil {
+                    logger.ErrorContext("source", s.ID, "Error marshaling stats: %v", err)
+                    continue
+                }
 
-            event := EventSource{
-                SourceID: s.ID,
-                Content:  string(jsonContent),
-                Time:     time.Now(),
-            }
+                wrapCallObject := map[string]interface{}{
+                    "ip":      "127.0.0.1",
+                    "path":    fmt.Sprintf("ts_gauge_systemstats_%ds", int(s.Interval.Seconds())),
+                    "params":  map[string]string{},
+                    "headers": map[string]string{"Content-Type": "application/json"},
+                    "body":    string(bodyJSON),
+                    "method":  "POST",
+                }
 
-            select {
-            case s.EventChan <- event:
-                logger.TraceContext("source", s.ID, "Stats collected and sent")
-            default:
-                logger.WarnContext("source", s.ID, "Event channel full, dropping stats")
+                jsonContent, err := json.Marshal(wrapCallObject)
+                if err != nil {
+                    logger.ErrorContext("source", s.ID, "Error marshaling JSON: %v", err)
+                    continue
+                }
+
+                event := EventSource{
+                    SourceID: s.ID,
+                    Content:  string(jsonContent),
+                    Time:     now,
+                }
+
+                select {
+                case s.EventChan <- event:
+                    logger.TraceContext("source", s.ID, "Stats collected and sent for %s", serieName)
+                default:
+                    logger.WarnContext("source", s.ID, "Event channel full, dropping stats for %s", serieName)
+                }
             }
         }
     }
