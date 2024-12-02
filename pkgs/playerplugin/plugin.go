@@ -1,7 +1,8 @@
 package playerplugin
 
 import (
- "encoding/json"
+	"encoding/json"
+	"sync"
 )
 
 type BaseSink struct {
@@ -18,9 +19,9 @@ type SinkConfig struct {
 }
 
 type Sink interface {
-	Init(config SinkConfig) error
+	Init(config SinkConfig, sinkChannels *sync.Map) error
 	Start() error
-	Execute(method, path string, body []byte, headers map[string]interface{}, params map[string]interface{}, sinkChannels map[string]chan string) error
+	Execute(method, path string, body []byte, headers map[string]interface{}, params map[string]interface{}, sinkChannels *sync.Map) error
 	Close() error
 	GetID() string
 	GetExposedPort() (int, bool)

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"github.com/chamot1111/replayforge/pkgs/playerplugin"
 	"github.com/chamot1111/replayforge/pkgs/logger"
+	"sync"
 )
 
 type HttpSink struct {
@@ -16,7 +17,7 @@ type HttpSink struct {
 	ID string
 }
 
-func (s *HttpSink) Init(config playerplugin.SinkConfig) error {
+func (s *HttpSink) Init(config playerplugin.SinkConfig, sinkChannels *sync.Map) error {
 	var params struct {
 		TargetHost string `json:"targetHost"`
 	}
@@ -35,7 +36,7 @@ func (s *HttpSink) Start() error {
 	return nil
 }
 
-func (s *HttpSink) Execute(method, path string, body []byte, headers map[string]interface{}, params map[string]interface{}, sinkChannels map[string]chan string) error {
+func (s *HttpSink) Execute(method, path string, body []byte, headers map[string]interface{}, params map[string]interface{}, sinkChannels *sync.Map) error {
 	targetUrl := s.TargetHost + path
 	client := &http.Client{}
 

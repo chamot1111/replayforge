@@ -64,7 +64,7 @@ var (
 	sources             []Source
 	sinks               map[string]playerplugin.Sink
 	sinkConfigByName map[string]SinkConfig
-	sinkChannels        map[string]chan string
+	sinkChannels        sync.Map
 	useTsnet            bool
 	tsnetHostname       string
 	globalExposedPort   int
@@ -113,8 +113,8 @@ func timerHandler(sourceID string) {
 
 		logger.Debug("Timer emitted content for sink %s: %s", sinkId, emittedContent)
 
-		if ch, ok := sinkChannels[sinkId]; ok {
-			ch <- emittedContent
+		if ch, ok := sinkChannels.Load(sinkId); ok {
+			ch.(chan string) <- emittedContent
 		} else {
 			logger.Error("Sink channel with ID %s not found", sinkId)
 		}
@@ -234,7 +234,7 @@ func init() {
 	}
 
 	sinks = make(map[string]playerplugin.Sink)
-	sinkChannels = make(map[string]chan string)
+	sinkChannels = sync.Map{}
 	sinkConfigByName = make(map[string]SinkConfig)
 
 	for _, sc := range sinksConfig {
@@ -244,6 +244,8 @@ func init() {
 			sink = &HttpSink{}
 		case "db":
 			sink = &SqliteSink{}
+		case "alert":
+			sink = &AlertSink{}
 		case "log":
 			sink = &LogSink{}
 		case "notification":
@@ -276,7 +278,7 @@ func init() {
 			sinkConfig.BaseSink.Metadata = metadata
 		}
 
-		if err := sink.Init(sinkConfig); err != nil {
+		if err := sink.Init(sinkConfig, &sinkChannels); err != nil {
 			logger.Fatal("Failed to initialize sink: %v", err)
 		}
 
@@ -285,7 +287,7 @@ func init() {
 		}
 
 		sinks[sc.Name] = sink
-		sinkChannels[sc.Name] = make(chan string, 1000)
+		sinkChannels.Store(sc.Name, make(chan string, 1000))
 		sinkConfigByName[sc.Name] = sc
 	}
 
@@ -500,10 +502,10 @@ func OnServerHeartbeat(source *Source, client *http.Client) {
 
 					logger.Debug("Processed content for sink %s: %s", sinkId, emittedContent)
 
-					if ch, ok := sinkChannels[sinkId]; ok {
-						ch <- emittedContent
+					if ch, ok := sinkChannels.Load(sinkId); ok {
+					    ch.(chan string) <- emittedContent
 					} else {
-						logger.Error("Sink channel with ID %s not found", sinkId)
+					    logger.Error("Sink channel with ID %s not found", sinkId)
 					}
 
 					return 0
@@ -779,8 +781,9 @@ func main() {
 		sink := sink
 
 		go func(sinkName string, sink playerplugin.Sink) {
-			ch := sinkChannels[sinkName]
-			for msg := range ch {
+			ch, _ := sinkChannels.Load(sinkName)
+			chTyped := ch.(chan string)
+			for msg := range chTyped {
 				var decodedData map[string]interface{}
 				err := json.Unmarshal([]byte(msg), &decodedData)
 				if err != nil {
@@ -794,7 +797,7 @@ func main() {
 				headers, _ := decodedData["headers"].(map[string]interface{})
 				params, _ := decodedData["params"].(map[string]interface{})
 
-				err = sink.Execute(method, path, []byte(requestBody), headers, params, sinkChannels)
+				err = sink.Execute(method, path, []byte(requestBody), headers, params, &sinkChannels)
 				if err != nil {
 					logger.Error("Error executing sink operation: %v", err)
 				}

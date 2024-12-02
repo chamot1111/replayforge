@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/chamot1111/replayforge/pkgs/playerplugin"
 	"github.com/chamot1111/replayforge/pkgs/logger"
+	"sync"
 )
 
 type LogSink struct {
@@ -14,7 +15,7 @@ type LogSink struct {
 	ID          string
 }
 
-func (s *LogSink) Init(config playerplugin.SinkConfig) error {
+func (s *LogSink) Init(config playerplugin.SinkConfig, sinkChannels *sync.Map) error {
 	s.BucketName = config.Name
 
 	var params map[string]interface{}
@@ -43,7 +44,7 @@ func (s *LogSink) Start() error {
 	return nil
 }
 
-func (s *LogSink) Execute(method, path string, body []byte, headers map[string]interface{}, params map[string]interface{}, sinkChannels map[string]chan string) error {
+func (s *LogSink) Execute(method, path string, body []byte, headers map[string]interface{}, params map[string]interface{}, sinkChannels *sync.Map) error {
 	logger.Info("Method: %s", method)
 	logger.Info("Path: %s", path)
 	logger.Info("Body: %s", string(body))

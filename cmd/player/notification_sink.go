@@ -10,6 +10,8 @@ import (
 	"github.com/chamot1111/replayforge/pkgs/logger"
 
 	_ "github.com/mattn/go-sqlite3"
+
+	"sync"
 )
 
 type WebhookConfig struct {
@@ -25,7 +27,7 @@ type NotificationSink struct {
 	WebhookConfigs map[string]WebhookConfig
 }
 
-func (s *NotificationSink) Init(config playerplugin.SinkConfig) error {
+func (s *NotificationSink) Init(config playerplugin.SinkConfig, sinkChannels *sync.Map) error {
 	// Initialize the NotificationSink with the provided configuration
 	var params map[string]interface{}
 	err := json.Unmarshal(config.Params, &params)
@@ -92,7 +94,7 @@ func (s *NotificationSink) Start() error {
 	return nil
 }
 
-func (s *NotificationSink) Execute(method, path string, body []byte, headers map[string]interface{}, params map[string]interface{}, sinkChannels map[string]chan string) error {
+func (s *NotificationSink) Execute(method, path string, body []byte, headers map[string]interface{}, params map[string]interface{}, sinkChannels *sync.Map) error {
 	switch method {
 	case "POST":
 		return s.handlePost(body)
@@ -218,4 +220,18 @@ func (s *NotificationSink) GetID() string {
 
 func (s *NotificationSink) GetExposedPort() (int, bool) {
 	return 0, false
+}
+
+func BuildNotificationEvent(subject, message string) ([]byte, error) {
+ notificationObject := map[string]interface{}{
+  "subject": subject,
+  "message": message,
+ }
+
+ notificationContent, err := json.Marshal(notificationObject)
+ if err != nil {
+  return nil, fmt.Errorf("error marshaling notification object: %v", err)
+ }
+
+ return BuildProxyCallObject("/", "POST", notificationContent, nil, nil)
 }
