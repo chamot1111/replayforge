@@ -444,7 +444,7 @@ func OnServerHeartbeat(source *Source, client *http.Client) {
 
 		resp, err := client.Do(req)
 		if err != nil {
-			logger.Error("Error fetching from relay: %v", err)
+			logger.ErrorContext("source", source.Name, "Error fetching from relay: %v", err)
 			if backoffIndex < len(backoffDelays) {
 				curBackoffToSkip = backoffDelays[backoffIndex]
 				backoffIndex = min(backoffIndex+1, len(backoffDelays)-1)
@@ -459,7 +459,7 @@ func OnServerHeartbeat(source *Source, client *http.Client) {
 		}
 		if resp.StatusCode != 200 {
 			body, _ := io.ReadAll(resp.Body)
-			logger.Error("Error fetching data from relay server - HTTP Status: %d. Response body received: %s.", resp.StatusCode, string(body))
+			logger.ErrorContext("source", source.Name, "Error fetching data from relay server - HTTP Status: %d. Response body received: %s.", resp.StatusCode, string(body))
 			if backoffIndex < len(backoffDelays) {
 				curBackoffToSkip = backoffDelays[backoffIndex]
 				backoffIndex = min(backoffIndex+1, len(backoffDelays)-1)

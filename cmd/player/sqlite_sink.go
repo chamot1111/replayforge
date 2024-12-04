@@ -15,6 +15,7 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 	"sync"
+	"runtime"
 )
 
 type TimeseriesType string
@@ -135,6 +136,14 @@ func (s *SqliteSink) registerTimeseriesTable(tableName string, parts []string) e
 	_, err = s.DB.Exec(triggerQuery)
 	if err != nil {
 		return fmt.Errorf("failed to create cleanup trigger: %v", err)
+	}
+
+	if _, exists := s.TableSchemas[tableName]; !exists {
+		s.TableSchemas[tableName] = make(map[string]string)
+		s.TableSchemas[tableName]["timestamp"] = "INTEGER"
+		s.TableSchemas[tableName]["serie_name"] = "TEXT"
+		s.TableSchemas[tableName]["value"] = "REAL"
+		s.TableSchemas[tableName]["metadata"] = "JSON"
 	}
 
 	err = s.ensureColumnExists(tableName, "_rpf_id", "INTEGER")
@@ -502,7 +511,9 @@ func (s *SqliteSink) ensureColumnExists(table, column, dataType string) error {
 		query := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, dataType)
 		_, err := s.DB.Exec(query)
 		if err != nil {
-			return fmt.Errorf("failed to add column %s to table %s: %v", column, table, err)
+			stackTrace := make([]byte, 8192)
+			runtime.Stack(stackTrace, false)
+			return fmt.Errorf("failed to add column %s to table %s: %v\nStack trace:\n%s", column, table, err, string(stackTrace))
 		}
 		s.TableSchemas[table][column] = dataType
 
@@ -530,6 +541,13 @@ func (s *SqliteSink) handlePost(table string, body []byte) error {
 		return fmt.Errorf("failed to unmarshal JSON: %v", err)
 	}
 
+	newData := make(map[string]interface{})
+	for k, v := range data {
+		newKey := sanitizeIdentifier(k)
+		newData[newKey] = v
+	}
+	data = newData
+
 	data["_rpf_last_updated_idx"] = time.Now().Unix()
 	s.LastRpfID++
 	data["_rpf_id"] = s.LastRpfID
@@ -537,7 +555,25 @@ func (s *SqliteSink) handlePost(table string, body []byte) error {
 	if strings.HasPrefix(table, "ts_") {
 		timestamp := time.Now().Unix()
 		if t, ok := data["timestamp"]; ok {
-			timestamp = t.(int64)
+			switch v := t.(type) {
+			case int64:
+				timestamp = v
+			case float64:
+				timestamp = int64(v)
+			case string:
+				if ts, err := time.Parse(time.RFC3339, v); err == nil {
+					timestamp = ts.Unix()
+				} else if ts, err := time.Parse("2006-01-02T15:04:05Z", v); err == nil {
+					timestamp = ts.Unix()
+				} else if ts, err := time.Parse("2006-01-02 15:04:05", v); err == nil {
+					timestamp = ts.Unix()
+				} else {
+					// Try parsing as Unix timestamp string
+					if i, err := strconv.ParseInt(v, 10, 64); err == nil {
+						timestamp = i
+					}
+				}
+			}
 		}
 
 		if tsConfig, ok := s.TimeseriesTables[table]; ok {
@@ -552,21 +588,25 @@ func (s *SqliteSink) handlePost(table string, body []byte) error {
 
 			switch tsConfig.Type {
 			case CounterType:
-				if value, ok := data["value"]; ok {
-					var currentCount int64 = 0
-					row := s.DB.QueryRow(fmt.Sprintf("SELECT count FROM %s WHERE timestamp = ? AND serie_name = ?", table), data["timestamp"], data["serie_name"])
-					err := row.Scan(&currentCount)
-					if err != nil {
-						if err == sql.ErrNoRows {
-							data["count"] = int64(value.(float64))
-						} else {
-							return fmt.Errorf("failed to query current count: %v", err)
-						}
+			if value, ok := data["value"]; ok {
+				var currentCount sql.NullInt64
+				row := s.DB.QueryRow(fmt.Sprintf("SELECT count FROM %s WHERE timestamp = ? AND serie_name = ?", table), data["timestamp"], data["serie_name"])
+				err := row.Scan(&currentCount)
+				if err != nil {
+					if err == sql.ErrNoRows {
+						data["count"] = int64(value.(float64))
 					} else {
-						data["count"] = currentCount + int64(value.(float64))
+						return fmt.Errorf("failed to query current count: %v", err)
 					}
-					data["increment"] = value
+				} else {
+					if currentCount.Valid {
+						data["count"] = currentCount.Int64 + int64(value.(float64))
+					} else {
+						data["count"] = int64(value.(float64))
+					}
 				}
+				data["increment"] = value
+			}
 			case RollupType:
 				if value, ok := data["value"]; ok {
 					var min, max, sum float64 = 0, 0, 0
