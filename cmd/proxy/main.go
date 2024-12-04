@@ -132,7 +132,9 @@ func initStats() {
 	}
 
 	logLevel := os.Getenv("LOG_LEVEL")
-	if logLevel != "" {
+	if config.VerbosityLevel != "" {
+		logger.SetLogLevel(config.VerbosityLevel)
+	} else if logLevel != "" {
 		logger.SetLogLevel(logLevel)
 	}
 }

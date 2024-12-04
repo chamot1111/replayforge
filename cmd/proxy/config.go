@@ -34,14 +34,15 @@ type SourceConfig struct {
 }
 
 type Config struct {
-	Sources       []json.RawMessage
-	Sinks         []Sink
-	TsnetHostname string `json:"tsnetHostname"`
-	PortStatusZ   int    `json:"portStatusZ"`
-	EnvName       string `json:"envName"`
-	HostName      string `json:"hostName"`
-	UseTsnetStatusZ      bool   `json:"useTsnetStatusZ"`
-	EnablePprof   bool   `json:"enablePprof"`   // Enable pprof profiling
+	Sources         []json.RawMessage
+	Sinks           []Sink
+	TsnetHostname   string `json:"tsnetHostname"`
+	PortStatusZ     int    `json:"portStatusZ"`
+	EnvName         string `json:"envName"`
+	HostName        string `json:"hostName"`
+	UseTsnetStatusZ bool   `json:"useTsnetStatusZ"`
+	EnablePprof     bool   `json:"enablePprof"`   // Enable pprof profiling
+	VerbosityLevel  string `json:"verbosityLevel"` // Optional verbosity level (debug, info, warn, error)
 }
 
 

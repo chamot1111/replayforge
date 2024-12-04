@@ -14,6 +14,7 @@ import (
 	"time"
 	"fmt"
 	"runtime"
+	"path/filepath"
 
 	"github.com/chamot1111/replayforge/pkgs/lualibs"
 	"github.com/chamot1111/replayforge/pkgs/playerplugin"
@@ -685,6 +686,21 @@ func main() {
 		})
 
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			// Try to serve static file first
+			if staticFolderPath != "" {
+				filePath := filepath.Join(staticFolderPath, filepath.Clean(r.URL.Path))
+				if !strings.HasPrefix(filePath, staticFolderPath) {
+					http.Error(w, "Invalid path", http.StatusForbidden)
+					return
+				}
+				if _, err := os.Stat(filePath); err == nil {
+					fs := http.FileServer(http.Dir(staticFolderPath))
+					fs.ServeHTTP(w, r)
+					return
+				}
+			}
+
+			// Fall back to sink handling
 			path := strings.TrimPrefix(r.URL.Path, "/")
 			parts := strings.SplitN(path, "/", 2)
 			sinkID := parts[0]
