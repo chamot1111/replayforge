@@ -119,6 +119,7 @@ func GetContextHistory(sinkOrSource string, id string) []ContextLogEntry {
 // SetLogLevel permet de changer le niveau de log dynamiquement
 func SetLogLevel(level string) {
 	Configure(Config{Level: level})
+	fmt.Printf("Logger level set to: %s\n", level)
 }
 
 func shouldLog(level LogLevel, msg string) bool {

@@ -62,6 +62,7 @@ var (
 	heartbeatIntervalMs  = 1000
 	maxDbSize            = 100 * 1024 * 1024 // 100 MB
 	relayUrl            string
+	relayUrlStatusz     string
 	sources             []Source
 	sinks               map[string]playerplugin.Sink
 	sinkConfigByName map[string]SinkConfig
@@ -159,6 +160,11 @@ func init() {
 	}
 
 	relayUrl = config["relayUrl"].(string)
+
+	if statusUrl, ok := config["relayUrlStatusz"].(string); ok {
+		relayUrlStatusz = statusUrl
+		logger.Debug("Status URL set to %s", relayUrlStatusz)
+	}
 
 	if val, ok := config["envName"].(string); ok {
 		envName = val
@@ -763,6 +769,51 @@ func main() {
 			}
 
 			http.Error(w, "Sink not found", http.StatusNotFound)
+		})
+
+		mux.HandleFunc("/relay-proxy/", func(w http.ResponseWriter, r *http.Request) {
+			logger.Trace("Handling relay-proxy request: %s %s", r.Method, r.URL.Path)
+
+			relayUrlParsed, err := url.Parse(relayUrlStatusz)
+			if err != nil {
+				logger.Error("Failed to parse relay URL: %v", err)
+				http.Error(w, "Error parsing relay URL", http.StatusInternalServerError)
+				return
+			}
+
+			if relayUrlParsed.Scheme == "" {
+				relayUrlParsed.Scheme = "http"
+			}
+
+			proxy := httputil.NewSingleHostReverseProxy(relayUrlParsed)
+			originalPath := r.URL.Path
+			r.URL.Path = strings.TrimPrefix(r.URL.Path, "/relay-proxy")
+			logger.Trace("Rewrote path from %s to %s", originalPath, r.URL.Path)
+
+			// Copy headers from original request
+			for k, v := range r.Header {
+				for _, val := range v {
+					proxy.Director = func(req *http.Request) {
+						logger.Trace("Setting proxy request details - URL: %s, Host: %s, Path: %s",
+							relayUrlParsed.String(), relayUrlParsed.Host, r.URL.Path)
+						req.URL.Scheme = relayUrlParsed.Scheme
+						req.URL.Host = relayUrlParsed.Host
+						req.Host = relayUrlParsed.Host
+						req.URL.Path = r.URL.Path
+						req.Header.Set(k, val)
+						logger.Trace("Set header %s = %s", k, val)
+					}
+				}
+			}
+
+			if useTsnet {
+				logger.Trace("Using tsnet transport for proxy")
+				proxy.Transport = client.Transport
+			}
+
+			logger.Trace("Forwarding request to relay server")
+			proxy.ServeHTTP(w, r)
+			logger.Trace("Completed forwarding request")
 		})
 
 		go func() {
