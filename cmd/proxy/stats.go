@@ -231,6 +231,12 @@ func startNodeInfoReporting() {
 					req.Header.Set("Authorization", "Bearer "+sink.AuthBearer)
 				}
 
+				if len(sink.Buckets) == 0 {
+					logger.ErrorContext("sink", sink.ID, "No buckets configured for sink")
+					continue
+				}
+				req.Header.Set("RF-BUCKET", sink.Buckets[0])
+
 				logger.TraceContext("sink", sink.ID, "Sending node info to %s", sink.URL)
 				resp, err := client.Do(req)
 				if err != nil {
