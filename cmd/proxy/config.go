@@ -103,6 +103,10 @@ func loadConfig() {
 		}
 	}
 
+	if config.VerbosityLevel != "" {
+		logger.SetLogLevel(config.VerbosityLevel)
+	}
+
 	vms = make(map[string]*lua.State)
 	lastVacuumTimes = make(map[string]time.Time)
 	sources = make(map[string]Source)

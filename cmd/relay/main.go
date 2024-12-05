@@ -42,6 +42,10 @@ type NodeInfo struct {
 	LastUpdated       time.Time `json:"lastUpdated"`
 	WarnCount         int       `json:"warnCount"`
 	ErrorCount        int       `json:"errorCount"`
+	DiskTotal         float64                 `json:"diskTotal"`
+	DiskFree          float64                 `json:"diskFree"`
+	DiskUsedPct       float64                 `json:"diskUsedPct"`
+	StatuszInfo       map[string]interface{}  `json:"statuszInfo"`
 }
 
 type BucketConfig struct {
@@ -101,6 +105,8 @@ func init() {
 	go func() {
 		for range statsResetTicker.C {
 			statsMutex.Lock()
+			oneHourAgo := time.Now().Add(-1 * time.Hour)
+
 			for bucket, stats := range bucketStats {
 				dbPath := filepath.Join(dbFolder, bucket, "relay.sqlite3")
 				if stat, err := os.Stat(dbPath); err == nil {
@@ -111,7 +117,7 @@ func init() {
 				stats.RxQueryByMinute = 0
 				stats.TxMessageByMinute = 0
 				stats.TxQueryByMinute = 0
-				stats.DatabaseMaxSizeKb = int64(config.Buckets[bucket].DbMaxSizeKb) // Added line
+				stats.DatabaseMaxSizeKb = int64(config.Buckets[bucket].DbMaxSizeKb)
 			}
 			for _, stats := range envStats {
 				stats.LastMinuteRxMessages = stats.RxMessagesByMinute
@@ -120,7 +126,11 @@ func init() {
 				stats.TxMessageByMinute = 0
 				stats.TxQueryByMinute = 0
 			}
-			for _, stats := range hostnameStats {
+			for hostname, stats := range hostnameStats {
+				if stats.TxLastAccess.Before(oneHourAgo) && stats.RxLastMessageDate.Before(oneHourAgo) {
+					delete(hostnameStats, hostname)
+					continue
+				}
 				stats.LastMinuteRxMessages = stats.RxMessagesByMinute
 				stats.RxMessagesByMinute = 0
 				stats.RxQueryByMinute = 0
@@ -183,7 +193,7 @@ func handleStatusZ(w http.ResponseWriter, r *http.Request) {
 		if stat, err := os.Stat(dbPath); err == nil {
 			stats.DatabaseSizeKb = stat.Size() / 1024
 		}
-		stats.DatabaseMaxSizeKb = int64(config.Buckets[bucket].DbMaxSizeKb) // Added line
+		stats.DatabaseMaxSizeKb = int64(config.Buckets[bucket].DbMaxSizeKb)
 	}
 
 	stats := struct {
@@ -239,7 +249,7 @@ func main() {
 		stats := &BucketStats{
 			Kind:              "relay",
 			ID:                bucket,
-			DatabaseMaxSizeKb: int64(config.Buckets[bucket].DbMaxSizeKb), // Added line
+			DatabaseMaxSizeKb: int64(config.Buckets[bucket].DbMaxSizeKb),
 		}
 
 		dbPath := filepath.Join(dbFolder, bucket, "relay.sqlite3")

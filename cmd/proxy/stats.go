@@ -14,6 +14,7 @@ import (
 	"github.com/chamot1111/replayforge/pkgs/logger"
 	"github.com/shirou/gopsutil/v4/cpu"
 	"github.com/shirou/gopsutil/v4/mem"
+	"github.com/shirou/gopsutil/v4/disk"
 )
 
 type Stats struct {
@@ -39,34 +40,159 @@ type SinkStats struct {
 	LastMessageDate    time.Time
 }
 
+func getStatuszInfo(includeLogs bool, sinkFilter string, sourceFilter string) map[string]interface{} {
+	stats.RLock()
+	defer stats.RUnlock()
+
+	sinks := make(map[string]map[string]interface{})
+	for _, sink := range config.Sinks {
+		if sinkFilter != "" && sink.ID != sinkFilter {
+			continue
+		}
+
+		count, lastMsg, err := getSinkStats(sink)
+		if err != nil {
+			sinks[sink.ID] = map[string]interface{}{
+				"error": err.Error(),
+			}
+		} else {
+			sinkInfo := map[string]interface{}{
+				"id":                 stats.Sinks[sink.ID].ID,
+				"url":                stats.Sinks[sink.ID].URL,
+				"messagesByMinute":   stats.Sinks[sink.ID].MessagesByMinute,
+				"messageSinceStart":  stats.Sinks[sink.ID].MessagesSinceStart,
+				"lastMessageDate":    stats.Sinks[sink.ID].LastMessageDate,
+				"totalEvents":        count,
+				"batchCounter":       sink.batchCounter,
+				"lastMessage": func(msg string) string {
+					if len(msg) > 15 {
+						return msg[:15] + "..."
+					}
+					return msg
+				}(lastMsg),
+			}
+
+			if includeLogs {
+				logs := logger.GetContextHistory("sink", sink.ID)
+				simpleLogs := make([]map[string]interface{}, len(logs))
+				for i, log := range logs {
+					levelStr := ""
+					switch log.Level {
+					case logger.LogLevelTrace:
+						levelStr = "TRACE"
+					case logger.LogLevelDebug:
+						levelStr = "DEBUG"
+					case logger.LogLevelInfo:
+						levelStr = "INFO"
+					case logger.LogLevelWarn:
+						levelStr = "WARN"
+					case logger.LogLevelError:
+						levelStr = "ERROR"
+					}
+					simpleLogs[i] = map[string]interface{}{
+						"timestamp": log.Timestamp,
+						"message":   log.Message,
+						"level":     levelStr,
+					}
+				}
+				sinkInfo["recentLogs"] = simpleLogs
+			}
+			sinks[sink.ID] = sinkInfo
+		}
+	}
+
+	sources := make(map[string]map[string]interface{})
+	for _, source := range config.Sources {
+		var sourceConfig SourceConfig
+		json.Unmarshal(source, &sourceConfig)
+
+		if sourceFilter != "" && sourceConfig.ID != sourceFilter {
+			continue
+		}
+
+		sourceInfo := map[string]interface{}{
+			"type":               stats.Sources[sourceConfig.ID].Type,
+			"id":                 stats.Sources[sourceConfig.ID].ID,
+			"messagesByMinute":   stats.Sources[sourceConfig.ID].MessagesByMinute,
+			"messageSinceStart":  stats.Sources[sourceConfig.ID].MessagesSinceStart,
+			"lastMessageDate":    stats.Sources[sourceConfig.ID].LastMessageDate,
+		}
+
+		if includeLogs {
+			logs := logger.GetContextHistory("source", sourceConfig.ID)
+			simpleLogs := make([]map[string]interface{}, len(logs))
+			for i, log := range logs {
+				levelStr := ""
+				switch log.Level {
+				case logger.LogLevelTrace:
+					levelStr = "TRACE"
+				case logger.LogLevelDebug:
+					levelStr = "DEBUG"
+				case logger.LogLevelInfo:
+					levelStr = "INFO"
+				case logger.LogLevelWarn:
+					levelStr = "WARN"
+				case logger.LogLevelError:
+					levelStr = "ERROR"
+				}
+				simpleLogs[i] = map[string]interface{}{
+					"timestamp": log.Timestamp,
+					"message":   log.Message,
+					"level":     levelStr,
+				}
+			}
+			sourceInfo["recentLogs"] = simpleLogs
+		}
+		sources[sourceConfig.ID] = sourceInfo
+	}
+
+	return map[string]interface{}{
+		"sources": sources,
+		"sinks":   sinks,
+		"uptime":  time.Since(stats.Started).String(),
+		"version": version.Version,
+	}
+}
 
 func startNodeInfoReporting() {
+	logger.Debug("Starting node info reporting")
 	go func() {
 		for {
+			logger.Trace("Sending node info")
 			var memStats runtime.MemStats
 			runtime.ReadMemStats(&memStats)
-
 			v, _ := mem.VirtualMemory()
 			c, _ := cpu.Percent(time.Second, false)
+			d, _ := disk.Usage("/")
 			warnCount, errorCount := logger.GetLogStats()
+
+			statuszInfo := getStatuszInfo(false, "", "")
 			nodeInfo := struct {
-				MemoryProcess     float64   `json:"memoryProcess"`
-				MemoryHostTotal   float64   `json:"memoryHostTotal"`
-				MemoryHostFree    float64   `json:"memoryHostFree"`
-				MemoryHostUsedPct float64   `json:"memoryHostUsedPct"`
-				CpuPercentHost    float64   `json:"cpuPercentHost"`
-				LastUpdated       time.Time `json:"lastUpdated"`
-				WarnCount         int64     `json:"warnCount"`
-				ErrorCount        int64     `json:"errorCount"`
+				MemoryProcess     float64                 `json:"memoryProcess"`
+				MemoryHostTotal   float64                 `json:"memoryHostTotal"`
+				MemoryHostFree    float64                 `json:"memoryHostFree"`
+				MemoryHostUsedPct float64                 `json:"memoryHostUsedPct"`
+				CpuPercentHost    float64                 `json:"cpuPercentHost"`
+				DiskTotal         float64                 `json:"diskTotal"`
+				DiskFree          float64                 `json:"diskFree"`
+				DiskUsedPct       float64                 `json:"diskUsedPct"`
+				LastUpdated       time.Time               `json:"lastUpdated"`
+				WarnCount         int64                   `json:"warnCount"`
+				ErrorCount        int64                   `json:"errorCount"`
+				StatuszInfo       map[string]interface{}  `json:"statuszInfo"`
 			}{
 				MemoryProcess:     float64(memStats.Alloc),
 				MemoryHostTotal:   float64(v.Total),
 				MemoryHostFree:    float64(v.Free),
 				MemoryHostUsedPct: v.UsedPercent,
 				CpuPercentHost:    c[0],
+				DiskTotal:         float64(d.Total),
+				DiskFree:          float64(d.Free),
+				DiskUsedPct:       d.UsedPercent,
 				LastUpdated:       time.Now(),
 				WarnCount:         warnCount,
 				ErrorCount:        errorCount,
+				StatuszInfo:       statuszInfo,
 			}
 
 			jsonData, err := json.Marshal(nodeInfo)
@@ -74,11 +200,9 @@ func startNodeInfoReporting() {
 				logger.Error("Failed to marshal node info: %v", err)
 				continue
 			}
-			// Keep track of URLs we've already sent to
-			sentUrls := make(map[string]bool)
 
+			sentUrls := make(map[string]bool)
 			for _, sink := range config.Sinks {
-				// Skip if we've already sent to this URL
 				if sentUrls[sink.URL] {
 					continue
 				}
@@ -117,7 +241,6 @@ func startNodeInfoReporting() {
 	}()
 }
 
-
 func startStatusServer() {
 	if config.PortStatusZ > 0 {
 		mux := http.NewServeMux()
@@ -130,121 +253,15 @@ func startStatusServer() {
 		}
 		mux.HandleFunc("/statusz", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			stats.RLock()
-			defer stats.RUnlock()
 
-			// Get filter parameters
 			sinkFilter := r.URL.Query().Get("sink")
 			sourceFilter := r.URL.Query().Get("source")
 
-			sinks := make(map[string]map[string]interface{})
-			for _, sink := range config.Sinks {
-				// Skip if sink filter specified and doesn't match
-				if sinkFilter != "" && sink.ID != sinkFilter {
-					continue
-				}
-
-				count, lastMsg, err := getSinkStats(sink)
-				if err != nil {
-					sinks[sink.ID] = map[string]interface{}{
-						"error": err.Error(),
-					}
-				} else {
-					logs := logger.GetContextHistory("sink", sink.ID)
-					simpleLogs := make([]map[string]interface{}, len(logs))
-					for i, log := range logs {
-						levelStr := ""
-						switch log.Level {
-						case logger.LogLevelTrace:
-							levelStr = "TRACE"
-						case logger.LogLevelDebug:
-							levelStr = "DEBUG"
-						case logger.LogLevelInfo:
-							levelStr = "INFO"
-						case logger.LogLevelWarn:
-							levelStr = "WARN"
-						case logger.LogLevelError:
-							levelStr = "ERROR"
-						}
-						simpleLogs[i] = map[string]interface{}{
-							"timestamp": log.Timestamp,
-							"message":   log.Message,
-							"level":     levelStr,
-						}
-					}
-
-					sinkStats := stats.Sinks[sink.ID]
-					sinks[sink.ID] = map[string]interface{}{
-						"id":                 sinkStats.ID,
-						"url":                sinkStats.URL,
-						"messagesByMinute":   sinkStats.MessagesByMinute,
-						"messageSinceStart":  sinkStats.MessagesSinceStart,
-						"lastMessageDate":    sinkStats.LastMessageDate,
-						"totalEvents":        count,
-						"batchCounter":       sink.batchCounter,
-						"lastMessage": func(msg string) string {
-							if len(msg) > 15 {
-								return msg[:15] + "..."
-							}
-							return msg
-						}(lastMsg),
-						"recentLogs": simpleLogs,
-					}
-				}
-			}
-
-			sources := make(map[string]map[string]interface{})
-			for _, source := range config.Sources {
-				var sourceConfig SourceConfig
-				json.Unmarshal(source, &sourceConfig)
-
-				// Skip if source filter specified and doesn't match
-				if sourceFilter != "" && sourceConfig.ID != sourceFilter {
-					continue
-				}
-
-				logs := logger.GetContextHistory("source", sourceConfig.ID)
-				simpleLogs := make([]map[string]interface{}, len(logs))
-				for i, log := range logs {
-					levelStr := ""
-					switch log.Level {
-					case logger.LogLevelTrace:
-						levelStr = "TRACE"
-					case logger.LogLevelDebug:
-						levelStr = "DEBUG"
-					case logger.LogLevelInfo:
-						levelStr = "INFO"
-					case logger.LogLevelWarn:
-						levelStr = "WARN"
-					case logger.LogLevelError:
-						levelStr = "ERROR"
-					}
-					simpleLogs[i] = map[string]interface{}{
-						"timestamp": log.Timestamp,
-						"message":   log.Message,
-						"level":     levelStr,
-					}
-				}
-
-				sourceStats := stats.Sources[sourceConfig.ID]
-				sources[sourceConfig.ID] = map[string]interface{}{
-					"type":               sourceStats.Type,
-					"id":                 sourceStats.ID,
-					"messagesByMinute":   sourceStats.MessagesByMinute,
-					"messageSinceStart":  sourceStats.MessagesSinceStart,
-					"lastMessageDate":    sourceStats.LastMessageDate,
-					"recentLogs":         simpleLogs,
-				}
-			}
+			statuszInfo := getStatuszInfo(true, sinkFilter, sourceFilter)
 
 			enc := json.NewEncoder(w)
 			enc.SetIndent("", "    ")
-			enc.Encode(map[string]interface{}{
-				"sources": sources,
-				"sinks":   sinks,
-				"uptime":  time.Since(stats.Started).String(),
-				"version": version.Version,
-			})
+			enc.Encode(statuszInfo)
 		})
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "text/plain")
