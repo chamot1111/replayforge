@@ -16,32 +16,32 @@ import (
 	"time"
 
 	"github.com/chamot1111/replayforge/internal/envparser"
+	"github.com/chamot1111/replayforge/pkgs/logger"
 	"github.com/chamot1111/replayforge/version"
 	_ "github.com/mattn/go-sqlite3"
 	"tailscale.com/tsnet"
-	"github.com/chamot1111/replayforge/pkgs/logger"
 )
 
 var (
-	configPath string
-	dbFolder   = "./"
-	port       int
-	config     Config
-	startTime  = time.Now()
-	statsMutex sync.RWMutex
-	enablePprof bool
+	configPath    string
+	dbFolder      = "./"
+	port          int
+	config        Config
+	startTime     = time.Now()
+	statsMutex    sync.RWMutex
+	enablePprof   bool
 	nodeInfoStats = make(map[string]*NodeInfo)
 )
 
 type NodeInfo struct {
-	MemoryProcess      float64   `json:"memoryProcess"`
-	MemoryHostTotal    float64   `json:"memoryHostTotal"`
-	MemoryHostFree     float64   `json:"memoryHostFree"`
-	MemoryHostUsedPct  float64   `json:"memoryHostUsedPct"`
-	CpuPercentHost   float64   `json:"cpuPercentHost"`
-	LastUpdated time.Time `json:"lastUpdated"`
-	WarnCount int `json:"warnCount"`
-	ErrorCount int `json:"errorCount"`
+	MemoryProcess     float64   `json:"memoryProcess"`
+	MemoryHostTotal   float64   `json:"memoryHostTotal"`
+	MemoryHostFree    float64   `json:"memoryHostFree"`
+	MemoryHostUsedPct float64   `json:"memoryHostUsedPct"`
+	CpuPercentHost    float64   `json:"cpuPercentHost"`
+	LastUpdated       time.Time `json:"lastUpdated"`
+	WarnCount         int       `json:"warnCount"`
+	ErrorCount        int       `json:"errorCount"`
 }
 
 type BucketConfig struct {
@@ -51,16 +51,18 @@ type BucketConfig struct {
 }
 
 type BucketStats struct {
-	Kind                string    `json:"kind"`
-	ID                  string    `json:"id"`
-	RxMessagesByMinute  int       `json:"rxMessagesByMinute"`
-	LastMinuteRxMessages int      `json:"lastMinuteRxMessages"`
-	RxMessagesSinceStart int      `json:"rxMessagesSinceStart"`
-	RxLastMessageDate   time.Time `json:"rxLastMessageDate"`
-	RxQueryByMinute     int       `json:"rxQueryByMinute"`
-	TxMessageByMinute   int       `json:"txMessageByMinute"`
-	TxQueryByMinute     int       `json:"txQueryByMinute"`
-	TxLastAccess        time.Time `json:"txLastAccess"`
+	Kind                 string    `json:"kind"`
+	ID                   string    `json:"id"`
+	DatabaseSizeKb       int64     `json:"databaseSizeKb"`
+	DatabaseMaxSizeKb    int64     `json:"databaseMaxSizeKb"` // Added field
+	RxMessagesByMinute   int       `json:"rxMessagesByMinute"`
+	LastMinuteRxMessages int       `json:"lastMinuteRxMessages"`
+	RxMessagesSinceStart int       `json:"rxMessagesSinceStart"`
+	RxLastMessageDate    time.Time `json:"rxLastMessageDate"`
+	RxQueryByMinute      int       `json:"rxQueryByMinute"`
+	TxMessageByMinute    int       `json:"txMessageByMinute"`
+	TxQueryByMinute      int       `json:"txQueryByMinute"`
+	TxLastAccess         time.Time `json:"txLastAccess"`
 }
 
 type Config struct {
@@ -99,12 +101,17 @@ func init() {
 	go func() {
 		for range statsResetTicker.C {
 			statsMutex.Lock()
-			for _, stats := range bucketStats {
+			for bucket, stats := range bucketStats {
+				dbPath := filepath.Join(dbFolder, bucket, "relay.sqlite3")
+				if stat, err := os.Stat(dbPath); err == nil {
+					stats.DatabaseSizeKb = stat.Size() / 1024
+				}
 				stats.LastMinuteRxMessages = stats.RxMessagesByMinute
 				stats.RxMessagesByMinute = 0
 				stats.RxQueryByMinute = 0
 				stats.TxMessageByMinute = 0
 				stats.TxQueryByMinute = 0
+				stats.DatabaseMaxSizeKb = int64(config.Buckets[bucket].DbMaxSizeKb) // Added line
 			}
 			for _, stats := range envStats {
 				stats.LastMinuteRxMessages = stats.RxMessagesByMinute
@@ -170,18 +177,27 @@ func handleStatusZ(w http.ResponseWriter, r *http.Request) {
 	}
 
 	statsMutex.RLock()
+	// Update database sizes before returning stats
+	for bucket, stats := range bucketStats {
+		dbPath := filepath.Join(dbFolder, bucket, "relay.sqlite3")
+		if stat, err := os.Stat(dbPath); err == nil {
+			stats.DatabaseSizeKb = stat.Size() / 1024
+		}
+		stats.DatabaseMaxSizeKb = int64(config.Buckets[bucket].DbMaxSizeKb) // Added line
+	}
+
 	stats := struct {
-		Uptime string                   `json:"uptime"`
-		Buckets map[string]*BucketStats `json:"buckets"`
-		Envs map[string]*BucketStats `json:"envs"`
+		Uptime    string                  `json:"uptime"`
+		Buckets   map[string]*BucketStats `json:"buckets"`
+		Envs      map[string]*BucketStats `json:"envs"`
 		Hostnames map[string]*BucketStats `json:"hostnames"`
-		NodeInfo map[string]*NodeInfo    `json:"nodeInfo"`
+		NodeInfo  map[string]*NodeInfo    `json:"nodeInfo"`
 	}{
-		Uptime:  time.Since(startTime).String(),
-		Buckets: bucketStats,
-		Envs: envStats,
+		Uptime:    time.Since(startTime).String(),
+		Buckets:   bucketStats,
+		Envs:      envStats,
 		Hostnames: hostnameStats,
-		NodeInfo: nodeInfoStats,
+		NodeInfo:  nodeInfoStats,
 	}
 	statsMutex.RUnlock()
 
@@ -220,10 +236,18 @@ func main() {
 
 	statsMutex.Lock()
 	for bucket := range config.Buckets {
-		bucketStats[bucket] = &BucketStats{
-			Kind: "relay",
-			ID:   bucket,
+		stats := &BucketStats{
+			Kind:              "relay",
+			ID:                bucket,
+			DatabaseMaxSizeKb: int64(config.Buckets[bucket].DbMaxSizeKb), // Added line
 		}
+
+		dbPath := filepath.Join(dbFolder, bucket, "relay.sqlite3")
+		if stat, err := os.Stat(dbPath); err == nil {
+			stats.DatabaseSizeKb = stat.Size() / 1024
+		}
+
+		bucketStats[bucket] = stats
 	}
 	statsMutex.Unlock()
 
@@ -334,7 +358,7 @@ func handleRecordBatch(w http.ResponseWriter, r *http.Request) {
 	for _, bucket := range buckets {
 		bucket = strings.TrimSpace(bucket)
 		if !verifyAuth(r.Header.Get("Authorization"), bucket) {
-			logger.Warn("Authentication failed for bucket: %s", bucket)
+			logger.WarnContext("bucket", bucket, "Authentication failed for bucket: %s", bucket)
 			http.Error(w, "Authentication failed", http.StatusUnauthorized)
 			return
 		}
@@ -357,12 +381,12 @@ func handleRecordBatch(w http.ResponseWriter, r *http.Request) {
 				stats.RxQueryByMinute++
 			} else {
 				envStats[envName] = &BucketStats{
-					Kind: "env",
-					ID: envName,
-					RxMessagesByMinute: len(events),
+					Kind:                 "env",
+					ID:                   envName,
+					RxMessagesByMinute:   len(events),
 					RxMessagesSinceStart: len(events),
-					RxLastMessageDate: now,
-					RxQueryByMinute: 1,
+					RxLastMessageDate:    now,
+					RxQueryByMinute:      1,
 				}
 			}
 		}
@@ -376,12 +400,12 @@ func handleRecordBatch(w http.ResponseWriter, r *http.Request) {
 				stats.RxQueryByMinute++
 			} else {
 				hostnameStats[hostname] = &BucketStats{
-					Kind: "hostname",
-					ID: hostname,
-					RxMessagesByMinute: len(events),
+					Kind:                 "hostname",
+					ID:                   hostname,
+					RxMessagesByMinute:   len(events),
 					RxMessagesSinceStart: len(events),
-					RxLastMessageDate: now,
-					RxQueryByMinute: 1,
+					RxLastMessageDate:    now,
+					RxQueryByMinute:      1,
 				}
 			}
 		}
@@ -400,14 +424,14 @@ func handleRecordBatch(w http.ResponseWriter, r *http.Request) {
 
 		err = os.MkdirAll(dbFolderBucket, 0755)
 		if err != nil {
-			logger.Error("Failed to create database folder for bucket %s: %v", bucket, err)
+			logger.ErrorContext("bucket", bucket, "Failed to create database folder for bucket %s: %v", bucket, err)
 			http.Error(w, "Failed to create database folder", http.StatusInternalServerError)
 			return
 		}
 
 		db, err := sql.Open("sqlite3", dbPath+"?_auto_vacuum=1&_journal_mode=WAL&_synchronous=NORMAL")
 		if err != nil {
-			logger.Error("Failed to open database for bucket %s: %v", bucket, err)
+			logger.ErrorContext("bucket", bucket, "Failed to open database for bucket %s: %v", bucket, err)
 			http.Error(w, "Failed to open database", http.StatusInternalServerError)
 			return
 		}
@@ -422,14 +446,14 @@ func handleRecordBatch(w http.ResponseWriter, r *http.Request) {
 			CREATE INDEX IF NOT EXISTS idx_timestamp ON wrap_calls (timestamp);
 								`)
 		if err != nil {
-			logger.Error("Failed to create table or index for bucket %s: %v", bucket, err)
+			logger.ErrorContext("bucket", bucket, "Failed to create table or index for bucket %s: %v", bucket, err)
 			http.Error(w, "Failed to create table or index", http.StatusInternalServerError)
 			return
 		}
 
 		tx, err := db.Begin()
 		if err != nil {
-			logger.Error("Failed to begin transaction for bucket %s: %v", bucket, err)
+			logger.ErrorContext("bucket", bucket, "Failed to begin transaction for bucket %s: %v", bucket, err)
 			http.Error(w, "Failed to begin transaction", http.StatusInternalServerError)
 			return
 		}
@@ -437,7 +461,7 @@ func handleRecordBatch(w http.ResponseWriter, r *http.Request) {
 		stmt, err := tx.Prepare("INSERT INTO wrap_calls (content, timestamp) VALUES (?, ?)")
 		if err != nil {
 			tx.Rollback()
-			logger.Error("Failed to prepare statement for bucket %s: %v", bucket, err)
+			logger.ErrorContext("bucket", bucket, "Failed to prepare statement for bucket %s: %v", bucket, err)
 			http.Error(w, "Failed to prepare statement", http.StatusInternalServerError)
 			return
 		}
@@ -448,14 +472,14 @@ func handleRecordBatch(w http.ResponseWriter, r *http.Request) {
 			_, err = stmt.Exec(event, timestamp)
 			if err != nil {
 				tx.Rollback()
-				logger.Error("Failed to insert event for bucket %s: %v", bucket, err)
+				logger.ErrorContext("bucket", bucket, "Failed to insert event for bucket %s: %v", bucket, err)
 				http.Error(w, "Failed to insert event", http.StatusInternalServerError)
 				return
 			}
 		}
 
 		if err = tx.Commit(); err != nil {
-			logger.Error("Failed to commit transaction for bucket %s: %v", bucket, err)
+			logger.ErrorContext("bucket", bucket, "Failed to commit transaction for bucket %s: %v", bucket, err)
 			http.Error(w, "Failed to commit transaction", http.StatusInternalServerError)
 			return
 		}
@@ -463,19 +487,19 @@ func handleRecordBatch(w http.ResponseWriter, r *http.Request) {
 		if bucketConfig.Tls > 0 {
 			_, err = db.Exec("DELETE FROM wrap_calls WHERE timestamp < ?", time.Now().Unix()-int64(bucketConfig.Tls))
 			if err != nil {
-				logger.Error("Failed to delete expired records for bucket %s: %v", bucket, err)
+				logger.ErrorContext("bucket", bucket, "Failed to delete expired records for bucket %s: %v", bucket, err)
 			}
 		}
 	}
 
 	if len(exceededBuckets) > 0 {
-		logger.Warn("Database size limit exceeded for buckets: %v", exceededBuckets)
 		http.Error(w, fmt.Sprintf("Database size limit exceeded for buckets: %v", exceededBuckets), http.StatusTooManyRequests)
 		return
 	}
 
 	w.WriteHeader(http.StatusOK)
 }
+
 func handleFirstBatch(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		logger.Warn("Method not allowed: %s", r.Method)
@@ -485,13 +509,13 @@ func handleFirstBatch(w http.ResponseWriter, r *http.Request) {
 
 	bucket := r.Header.Get("RF-BUCKET")
 	if bucket == "" {
-		logger.Warn("Missing RF-BUCKET header")
+		logger.WarnContext("bucket", bucket, "Missing RF-BUCKET header")
 		http.Error(w, "Missing RF-BUCKET header", http.StatusBadRequest)
 		return
 	}
 
 	if !verifyAuth(r.Header.Get("Authorization"), bucket) {
-		logger.Warn("Authentication failed for bucket: %s", bucket)
+		logger.WarnContext("bucket", bucket, "Authentication failed for bucket: %s", bucket)
 		http.Error(w, "Authentication failed", http.StatusUnauthorized)
 		return
 	}
@@ -505,7 +529,7 @@ func handleFirstBatch(w http.ResponseWriter, r *http.Request) {
 	if limitStr != "" {
 		parsedLimit, err := strconv.Atoi(limitStr)
 		if err != nil || parsedLimit <= 0 {
-			logger.Warn("Invalid limit parameter: %s", limitStr)
+			logger.WarnContext("bucket", bucket, "Invalid limit parameter: %s", limitStr)
 			http.Error(w, "Invalid limit parameter", http.StatusBadRequest)
 			return
 		}
@@ -517,14 +541,14 @@ func handleFirstBatch(w http.ResponseWriter, r *http.Request) {
 	dbPath := filepath.Join(dbFolder, bucket, "relay.sqlite3")
 
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
-		logger.Info("No content found for bucket: %s", bucket)
+		logger.InfoContext("bucket", bucket, "No content found for bucket: %s", bucket)
 		http.Error(w, "No content found", http.StatusNotFound)
 		return
 	}
 
 	db, err := sql.Open("sqlite3", dbPath+"?_auto_vacuum=1&_journal_mode=WAL&_synchronous=NORMAL")
 	if err != nil {
-		logger.Error("Failed to open database: %v", err)
+		logger.ErrorContext("bucket", bucket, "Failed to open database: %v", err)
 		http.Error(w, "Failed to open database", http.StatusInternalServerError)
 		return
 	}
@@ -537,7 +561,7 @@ func handleFirstBatch(w http.ResponseWriter, r *http.Request) {
 								LIMIT ?
 				`, limit)
 	if err != nil {
-		logger.Error("Failed to query database: %v", err)
+		logger.ErrorContext("bucket", bucket, "Failed to query database: %v", err)
 		http.Error(w, "Failed to query database", http.StatusInternalServerError)
 		return
 	}
@@ -548,7 +572,7 @@ func handleFirstBatch(w http.ResponseWriter, r *http.Request) {
 		var id int
 		var content string
 		if err := rows.Scan(&id, &content); err != nil {
-			logger.Error("Failed to scan row: %v", err)
+			logger.ErrorContext("bucket", bucket, "Failed to scan row: %v", err)
 			http.Error(w, "Failed to scan row", http.StatusInternalServerError)
 			return
 		}
@@ -578,11 +602,11 @@ func handleFirstBatch(w http.ResponseWriter, r *http.Request) {
 			stats.TxLastAccess = now
 		} else {
 			envStats[envName] = &BucketStats{
-				Kind: "env",
-				ID: envName,
-				TxQueryByMinute: 1,
+				Kind:              "env",
+				ID:                envName,
+				TxQueryByMinute:   1,
 				TxMessageByMinute: len(results),
-				TxLastAccess: now,
+				TxLastAccess:      now,
 			}
 		}
 	}
@@ -594,11 +618,11 @@ func handleFirstBatch(w http.ResponseWriter, r *http.Request) {
 			stats.TxLastAccess = now
 		} else {
 			hostnameStats[hostname] = &BucketStats{
-				Kind: "hostname",
-				ID: hostname,
-				TxQueryByMinute: 1,
+				Kind:              "hostname",
+				ID:                hostname,
+				TxQueryByMinute:   1,
 				TxMessageByMinute: len(results),
-				TxLastAccess: now,
+				TxLastAccess:      now,
 			}
 		}
 	}
@@ -618,20 +642,20 @@ func handleAcknowledgeBatch(w http.ResponseWriter, r *http.Request) {
 
 	bucket := r.Header.Get("RF-BUCKET")
 	if bucket == "" {
-		logger.Warn("Missing RF-BUCKET header")
+		logger.WarnContext("bucket", bucket, "Missing RF-BUCKET header")
 		http.Error(w, "Missing RF-BUCKET header", http.StatusBadRequest)
 		return
 	}
 
 	if !verifyAuth(r.Header.Get("Authorization"), bucket) {
-		logger.Warn("Authentication failed for bucket: %s", bucket)
+		logger.WarnContext("bucket", bucket, "Authentication failed for bucket: %s", bucket)
 		http.Error(w, "Authentication failed", http.StatusUnauthorized)
 		return
 	}
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		logger.Error("Failed to read body: %v", err)
+		logger.ErrorContext("bucket", bucket, "Failed to read body: %v", err)
 		http.Error(w, "Failed to read body", http.StatusInternalServerError)
 		return
 	}
@@ -640,13 +664,13 @@ func handleAcknowledgeBatch(w http.ResponseWriter, r *http.Request) {
 		Ids []string `json:"ids"`
 	}
 	if err := json.Unmarshal(body, &requestBody); err != nil {
-		logger.Error("Failed to parse ids: %v", err)
+		logger.ErrorContext("bucket", bucket, "Failed to parse ids: %v", err)
 		http.Error(w, "Invalid JSON format", http.StatusBadRequest)
 		return
 	}
 
 	if len(requestBody.Ids) == 0 {
-		logger.Warn("Empty ids array")
+		logger.WarnContext("bucket", bucket, "Empty ids array")
 		http.Error(w, "Empty ids array", http.StatusBadRequest)
 		return
 	}
@@ -654,14 +678,14 @@ func handleAcknowledgeBatch(w http.ResponseWriter, r *http.Request) {
 	dbPath := filepath.Join(dbFolder, bucket, "relay.sqlite3")
 
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
-		logger.Info("No content found for bucket: %s", bucket)
+		logger.InfoContext("bucket", bucket, "No content found for bucket: %s", bucket)
 		http.Error(w, "No content found", http.StatusNotFound)
 		return
 	}
 
 	db, err := sql.Open("sqlite3", dbPath+"?_auto_vacuum=1&_journal_mode=WAL&_synchronous=NORMAL")
 	if err != nil {
-		logger.Error("Failed to open database: %v", err)
+		logger.ErrorContext("bucket", bucket, "Failed to open database: %v", err)
 		http.Error(w, "Failed to open database", http.StatusInternalServerError)
 		return
 	}
@@ -678,14 +702,14 @@ func handleAcknowledgeBatch(w http.ResponseWriter, r *http.Request) {
 
 	result, err := db.Exec(query, args...)
 	if err != nil {
-		logger.Error("Failed to delete records: %v", err)
+		logger.ErrorContext("bucket", bucket, "Failed to delete records: %v", err)
 		http.Error(w, "Failed to delete records", http.StatusInternalServerError)
 		return
 	}
 
 	rowsAffected, _ := result.RowsAffected()
 	if rowsAffected == 0 {
-		logger.Info("No records found with provided ids")
+		logger.InfoContext("bucket", bucket, "No records found with provided ids")
 		http.Error(w, "No records found with provided ids", http.StatusNotFound)
 		return
 	}

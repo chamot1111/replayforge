@@ -152,7 +152,7 @@ func shouldLog(level LogLevel, msg string) (bool, string) {
 
 	// Add new entry
 	newEntry := logEntry{message: msg, timestamp: now, count: 1}
-	if len(validEntries) >= 5 {
+	if len(validEntries) >= 20 {
 		logHistory[level] = append(validEntries[1:], newEntry)
 	} else {
 		logHistory[level] = append(validEntries, newEntry)
