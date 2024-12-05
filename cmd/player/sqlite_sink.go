@@ -551,30 +551,33 @@ func (s *SqliteSink) handlePost(table string, body []byte) error {
 	data["_rpf_last_updated_idx"] = time.Now().Unix()
 	s.LastRpfID++
 	data["_rpf_id"] = s.LastRpfID
-
-	if strings.HasPrefix(table, "ts_") {
-		timestamp := time.Now().Unix()
-		if t, ok := data["timestamp"]; ok {
-			switch v := t.(type) {
-			case int64:
-				timestamp = v
-			case float64:
-				timestamp = int64(v)
-			case string:
-				if ts, err := time.Parse(time.RFC3339, v); err == nil {
-					timestamp = ts.Unix()
-				} else if ts, err := time.Parse("2006-01-02T15:04:05Z", v); err == nil {
-					timestamp = ts.Unix()
-				} else if ts, err := time.Parse("2006-01-02 15:04:05", v); err == nil {
-					timestamp = ts.Unix()
-				} else {
-					// Try parsing as Unix timestamp string
-					if i, err := strconv.ParseInt(v, 10, 64); err == nil {
-						timestamp = i
-					}
+	timestamp := time.Now().Unix()
+	if t, ok := data["timestamp"]; ok {
+		switch v := t.(type) {
+		case int64:
+			timestamp = v
+		case float64:
+			timestamp = int64(v)
+		case string:
+			if ts, err := time.Parse(time.RFC3339, v); err == nil {
+				timestamp = ts.Unix()
+			} else if ts, err := time.Parse("2006-01-02T15:04:05Z", v); err == nil {
+				timestamp = ts.Unix()
+			} else if ts, err := time.Parse("2006-01-02 15:04:05", v); err == nil {
+				timestamp = ts.Unix()
+			} else if ts, err := time.Parse("02/Jan/2006:15:04:05 -0700", v); err == nil {
+				timestamp = ts.Unix()
+			} else {
+				// Try parsing as Unix timestamp string
+				if i, err := strconv.ParseInt(v, 10, 64); err == nil {
+					timestamp = i
 				}
 			}
 		}
+	}
+	data["timestamp"] = timestamp
+
+	if strings.HasPrefix(table, "ts_") {
 
 		if tsConfig, ok := s.TimeseriesTables[table]; ok {
 			// Round timestamp to nearest interval
@@ -670,7 +673,7 @@ func (s *SqliteSink) handlePost(table string, body []byte) error {
 		}
 	} else {
 		if _, ok := data["id"]; !ok {
-			return fmt.Errorf("id is mandatory")
+			data["id"] = strconv.FormatInt(s.LastRpfID, 10)
 		}
 	}
 

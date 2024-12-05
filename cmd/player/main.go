@@ -507,24 +507,24 @@ func OnServerHeartbeat(source *Source, client *http.Client) {
 					sinkId, _ := l.ToString(1)
 					emittedContent, _ := l.ToString(2)
 
-					logger.Debug("Processed content for sink %s: %s", sinkId, emittedContent)
+					logger.DebugContext("source", source.Name, "Processed content for sink %s: %s", sinkId, emittedContent)
 
 					if ch, ok := sinkChannels.Load(sinkId); ok {
 					    ch.(chan string) <- emittedContent
 					} else {
-					    logger.Error("Sink channel with ID %s not found", sinkId)
+					    logger.ErrorContext("source", source.Name, "Sink channel with ID %s not found", sinkId)
 					}
 
 					return 0
 				})
 
 				if err := source.LuaVM.ProtectedCall(2, 1, 0); err != nil {
-					logger.Error("Error calling process function for source %s: %v", source.Name, err)
+					logger.ErrorContext("source", source.Name, "Error calling process function for source %s: %v", source.Name, err)
 					continue
 				}
 
 			} else {
-				logger.Error("'process' function not found in Lua script for source %s", source.Name)
+				logger.ErrorContext("source", source.Name, "'process' function not found in Lua script for source %s", source.Name)
 				source.LuaVM.Pop(1)
 				continue
 			}
@@ -536,7 +536,7 @@ func OnServerHeartbeat(source *Source, client *http.Client) {
 			// Acknowledge relay server
 			ackBody, err := json.Marshal(map[string][]string{"ids": idsToAck})
 			if err != nil {
-				logger.Error("Error marshaling acknowledgment body: %v", err)
+				logger.ErrorContext("source", source.Name, "Error marshaling acknowledgment body: %v", err)
 				if backoffIndex < len(backoffDelays) {
 					curBackoffToSkip = backoffDelays[backoffIndex]
 					backoffIndex = min(backoffIndex+1, len(backoffDelays)-1)
@@ -547,7 +547,7 @@ func OnServerHeartbeat(source *Source, client *http.Client) {
 			ackReq, err := http.NewRequest("DELETE", relayUrl+"acknowledge-batch", bytes.NewBuffer(ackBody))
 
 			if err != nil {
-				logger.Error("Error creating acknowledgment request: %v", err)
+				logger.ErrorContext("source", source.Name, "Error creating acknowledgment request: %v", err)
 				if backoffIndex < len(backoffDelays) {
 					curBackoffToSkip = backoffDelays[backoffIndex]
 					backoffIndex = min(backoffIndex+1, len(backoffDelays)-1)
@@ -564,7 +564,7 @@ func OnServerHeartbeat(source *Source, client *http.Client) {
 
 			ackResp, err := client.Do(ackReq)
 			if err != nil {
-				logger.Error("Error sending acknowledgment: %v", err)
+				logger.ErrorContext("source", source.Name, "Error sending acknowledgment: %v", err)
 				if backoffIndex < len(backoffDelays) {
 					curBackoffToSkip = backoffDelays[backoffIndex]
 					backoffIndex = min(backoffIndex+1, len(backoffDelays)-1)
@@ -574,17 +574,17 @@ func OnServerHeartbeat(source *Source, client *http.Client) {
 			defer ackResp.Body.Close()
 
 			if ackResp.StatusCode != 200 {
-				logger.Error("Unexpected status code from acknowledgment: %d", ackResp.StatusCode)
+				logger.ErrorContext("source", source.Name, "Unexpected status code from acknowledgment: %d", ackResp.StatusCode)
 				ackRespBody, err := io.ReadAll(ackResp.Body)
 				if err != nil {
-					logger.Error("Error reading acknowledgment response body: %v", err)
+					logger.ErrorContext("source", source.Name, "Error reading acknowledgment response body: %v", err)
 					if backoffIndex < len(backoffDelays) {
 						curBackoffToSkip = backoffDelays[backoffIndex]
 						backoffIndex = min(backoffIndex+1, len(backoffDelays)-1)
 					}
 					return
 				}
-				logger.Error("Acknowledgment response: %s", string(ackRespBody))
+				logger.ErrorContext("source", source.Name, "Acknowledgment response: %s", string(ackRespBody))
 			}
 		}
 
@@ -854,7 +854,7 @@ func main() {
 				var decodedData map[string]interface{}
 				err := json.Unmarshal([]byte(msg), &decodedData)
 				if err != nil {
-					logger.Error("Error decoding processed JSON data: %v", err)
+					logger.ErrorContext("sink", sink.GetID(), "Error decoding processed JSON data: %v", err)
 					continue
 				}
 
@@ -866,7 +866,7 @@ func main() {
 
 				err = sink.Execute(method, path, []byte(requestBody), headers, params, &sinkChannels)
 				if err != nil {
-					logger.Error("Error executing sink operation: %v", err)
+					logger.ErrorContext("sink", sink.GetID(), "Error executing sink operation: %v", err)
 				}
 			}
 		}(sinkName, sink)

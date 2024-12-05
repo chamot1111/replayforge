@@ -132,20 +132,23 @@ func shouldLog(level LogLevel, msg string) (bool, string) {
 
 	// Clean old messages and check if message exists in recent history
 	var validEntries []logEntry
-	for _, entry := range entries {
-		if now.Sub(entry.timestamp) < time.Duration(messageExpirationSeconds)*time.Second {
-			if entry.message == msg {
-				if entry.count == 1 {
-					minutesLeft := messageExpirationSeconds/60 - int(now.Sub(entry.timestamp).Minutes())
-					entry.count++
-					validEntries = append(validEntries, entry)
-					return true, fmt.Sprintf("%s (message muted for %d minutes)", msg, minutesLeft)
-				}
-				return false, ""
-			}
-			validEntries = append(validEntries, entry)
-		}
-	}
+	for i := range entries {
+        // Use pointer to modify the actual entry
+        if now.Sub(entries[i].timestamp) < time.Duration(messageExpirationSeconds)*time.Second {
+            if entries[i].message == msg {
+                if entries[i].count == 1 {
+                    minutesLeft := messageExpirationSeconds/60 - int(now.Sub(entries[i].timestamp).Minutes())
+                    entries[i].count++
+                    validEntries = append(validEntries, entries[i])
+                    // Update the entry in the original map
+                    logHistory[level] = validEntries
+                    return true, fmt.Sprintf("%s (future occurrences will be muted for %d minutes)", msg, minutesLeft)
+                }
+                return false, ""
+            }
+            validEntries = append(validEntries, entries[i])
+        }
+    }
 
 	// Add new entry
 	newEntry := logEntry{message: msg, timestamp: now, count: 1}
