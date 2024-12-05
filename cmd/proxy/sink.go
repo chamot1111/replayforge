@@ -37,6 +37,7 @@ type Sink struct {
 	MaxMessagesPerMinute int        `json:"maxMessagesPerMinute"`
 	TransformScript      string     `json:"transformScript"`
 	Config               SinkConfig `json:"config"`
+	NotRelay               bool       `json:"notRelay"`
 	vm                   *SinkVM
 	lastBatchTime        time.Time
 	batchCounter         int // Added field to track batch count

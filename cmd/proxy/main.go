@@ -113,6 +113,11 @@ func init() {
 
 // main starts all services and runs the application
 func main() {
+	logLevel := os.Getenv("RPF_LOG_LEVEL")
+	if logLevel != "" {
+		logger.SetLogLevel(logLevel)
+	}
+
 	startStatsCleaner()
 	startTsnetServer()
 	startSources()
@@ -129,11 +134,6 @@ func initStats() {
 		Sources: make(map[string]SourceStats),
 		Sinks:   make(map[string]SinkStats),
 		Started: time.Now(),
-	}
-
-	logLevel := os.Getenv("LOG_LEVEL")
-	if logLevel != "" {
-		logger.SetLogLevel(logLevel)
 	}
 }
 

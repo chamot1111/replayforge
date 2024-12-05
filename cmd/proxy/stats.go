@@ -203,7 +203,8 @@ func startNodeInfoReporting() {
 
 			sentUrls := make(map[string]bool)
 			for _, sink := range config.Sinks {
-				if sentUrls[sink.URL] {
+				if sink.NotRelay || sentUrls[sink.URL] {
+					logger.TraceContext("sink", sink.ID, "Skipping node info relay to %s", sink.URL)
 					continue
 				}
 				sentUrls[sink.URL] = true
@@ -228,11 +229,13 @@ func startNodeInfoReporting() {
 					req.Header.Set("Authorization", "Bearer "+sink.AuthBearer)
 				}
 
+				logger.TraceContext("sink", sink.ID, "Sending node info to %s", sink.URL)
 				resp, err := client.Do(req)
 				if err != nil {
 					logger.ErrorContext("sink", sink.ID, "Failed to send node info: %v", err)
 					continue
 				}
+				logger.TraceContext("sink", sink.ID, "Node info response: %s", resp.Status)
 				resp.Body.Close()
 			}
 
