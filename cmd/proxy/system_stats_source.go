@@ -8,6 +8,7 @@ import (
     "github.com/chamot1111/replayforge/pkgs/logger"
     "github.com/shirou/gopsutil/v4/cpu"
     "github.com/shirou/gopsutil/v4/mem"
+    "github.com/shirou/gopsutil/v4/disk"
 )
 
 type SystemStatsSource struct {
@@ -57,20 +58,6 @@ func (s *SystemStatsSource) collectStats() {
         case <-s.stopChan:
             return
         case <-ticker.C:
-            var memStats runtime.MemStats
-            runtime.ReadMemStats(&memStats)
-
-            v, err := mem.VirtualMemory()
-            if err != nil {
-                logger.ErrorContext("source", s.ID, "Failed to get virtual memory stats: %v", err)
-                continue
-            }
-
-            c, err := cpu.Percent(time.Second, false)
-            if err != nil {
-                logger.ErrorContext("source", s.ID, "Failed to get CPU stats: %v", err)
-                continue
-            }
             now := time.Now()
             stats := map[string]interface{}{
                 "timestamp": now,
@@ -78,14 +65,34 @@ func (s *SystemStatsSource) collectStats() {
                 "hostName": config.HostName,
             }
 
-            metrics := map[string]float64{
-                "memory_process":    float64(memStats.Alloc),
-                "memory_host_total": float64(v.Total),
-                "memory_host_free":  float64(v.Free),
-                "memory_host_used":  v.UsedPercent,
-                "cpu_percent":       c[0],
-                "num_goroutines":    float64(runtime.NumGoroutine()),
-                "gc_pause_ns":       float64(memStats.PauseNs[(memStats.NumGC+255)%256]),
+            metrics := make(map[string]float64)
+
+            var memStats runtime.MemStats
+            runtime.ReadMemStats(&memStats)
+            metrics["memory_process"] = float64(memStats.Alloc)
+            metrics["num_goroutines"] = float64(runtime.NumGoroutine())
+            metrics["gc_pause_ns"] = float64(memStats.PauseNs[(memStats.NumGC+255)%256])
+
+            if v, err := mem.VirtualMemory(); err == nil {
+                metrics["memory_host_total"] = float64(v.Total)
+                metrics["memory_host_free"] = float64(v.Free)
+                metrics["memory_host_used"] = v.UsedPercent
+            } else {
+                logger.ErrorContext("source", s.ID, "Failed to get virtual memory stats: %v", err)
+            }
+
+            if c, err := cpu.Percent(time.Second, false); err == nil {
+                metrics["cpu_percent"] = c[0]
+            } else {
+                logger.ErrorContext("source", s.ID, "Failed to get CPU stats: %v", err)
+            }
+
+            if d, err := disk.Usage("/"); err == nil {
+                metrics["disk_total"] = float64(d.Total)
+                metrics["disk_free"] = float64(d.Free)
+                metrics["disk_used"] = d.UsedPercent
+            } else {
+                logger.ErrorContext("source", s.ID, "Failed to get disk stats: %v", err)
             }
 
             for serieName, value := range metrics {
