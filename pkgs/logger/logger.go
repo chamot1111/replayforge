@@ -25,6 +25,7 @@ type logEntry struct {
 	message   string
 	timestamp time.Time
 	level     LogLevel
+	count     int
 }
 
 // ContextLogEntry stores context information for a log message
@@ -122,7 +123,7 @@ func SetLogLevel(level string) {
 	fmt.Printf("Logger level set to: %s\n", level)
 }
 
-func shouldLog(level LogLevel, msg string) bool {
+func shouldLog(level LogLevel, msg string) (bool, string) {
 	mu.Lock()
 	defer mu.Unlock()
 
@@ -134,28 +135,35 @@ func shouldLog(level LogLevel, msg string) bool {
 	for _, entry := range entries {
 		if now.Sub(entry.timestamp) < time.Duration(messageExpirationSeconds)*time.Second {
 			if entry.message == msg {
-				return false
+				if entry.count == 1 {
+					minutesLeft := messageExpirationSeconds/60 - int(now.Sub(entry.timestamp).Minutes())
+					entry.count++
+					validEntries = append(validEntries, entry)
+					return true, fmt.Sprintf("%s (message muted for %d minutes)", msg, minutesLeft)
+				}
+				return false, ""
 			}
 			validEntries = append(validEntries, entry)
 		}
 	}
 
 	// Add new entry
-	newEntry := logEntry{message: msg, timestamp: now}
+	newEntry := logEntry{message: msg, timestamp: now, count: 1}
 	if len(validEntries) >= 5 {
 		logHistory[level] = append(validEntries[1:], newEntry)
 	} else {
 		logHistory[level] = append(validEntries, newEntry)
 	}
 
-	return true
+	return true, msg
 }
 
 func logMsg(level LogLevel, format string, v ...interface{}) {
 	if level <= currentLogLevel {
 		msg := fmt.Sprintf(format, v...)
 
-		if !shouldLog(level, msg) {
+		shouldDisplay, displayMsg := shouldLog(level, msg)
+		if !shouldDisplay {
 			return
 		}
 
@@ -183,7 +191,7 @@ func logMsg(level LogLevel, format string, v ...interface{}) {
 			levelStr = "ERROR"
 		}
 
-		logger.Printf("[%s] %s | %s", time.Now().Format("2006-01-02 15:04:05"), levelStr, msg)
+		logger.Printf("[%s] %s | %s", time.Now().Format("2006-01-02 15:04:05"), levelStr, displayMsg)
 	}
 }
 
@@ -192,7 +200,8 @@ func logMsgWithContext(level LogLevel, sinkOrSource string, id string, format st
 		msg := fmt.Sprintf(format, v...)
 		contextMsg := fmt.Sprintf("[%s:%s] %s", sinkOrSource, id, msg)
 
-		if !shouldLog(level, contextMsg) {
+		shouldDisplay, displayMsg := shouldLog(level, contextMsg)
+		if !shouldDisplay {
 			return
 		}
 
@@ -237,7 +246,7 @@ func logMsgWithContext(level LogLevel, sinkOrSource string, id string, format st
 			levelStr = "ERROR"
 		}
 
-		logger.Printf("[%s] %s | %s", time.Now().Format("2006-01-02 15:04:05"), levelStr, contextMsg)
+		logger.Printf("[%s] %s | %s", time.Now().Format("2006-01-02 15:04:05"), levelStr, displayMsg)
 	}
 }
 
