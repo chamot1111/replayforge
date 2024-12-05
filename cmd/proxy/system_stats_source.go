@@ -91,7 +91,7 @@ func (s *SystemStatsSource) collectStats() {
             for serieName, value := range metrics {
                 stats["value"] = value
                 stats["serieName"] = serieName
-                stats["id"] = serieName + now.String()
+                stats["id"] = serieName + fmt.Sprint(now.Unix())
 
                 bodyJSON, err := json.Marshal(stats)
                 if err != nil {

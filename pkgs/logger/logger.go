@@ -17,7 +17,7 @@ const (
 	LogLevelInfo
 	LogLevelDebug
 	LogLevelTrace
-	messageExpirationSeconds = 30
+	messageExpirationSeconds = 3*60
 	historyLength = 100
 )
 
