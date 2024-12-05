@@ -155,7 +155,7 @@ func getStatuszInfo(includeLogs bool, sinkFilter string, sourceFilter string) ma
 }
 
 func startNodeInfoReporting() {
-	logger.Debug("Starting node info reporting")
+	logger.Info("Starting node info reporting")
 	go func() {
 		for {
 			logger.Trace("Sending node info")
