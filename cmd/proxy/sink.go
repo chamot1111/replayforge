@@ -141,7 +141,7 @@ func sinkDbToRelayServer(sink Sink) error {
 			batchSize = 0
 			batchSent = true
 		} else {
-			logger.DebugContext("sink", sink.ID, "Not sending batch yet (batch #%d): %d events, %d total size, waited %v/%d seconds (last batch time: %v)",
+			logger.TraceContext("sink", sink.ID, "Not sending batch yet (batch #%d): %d events, %d total size, waited %v/%d seconds (last batch time: %v)",
 				sink.batchCounter+1, len(batchContent), batchSize, time.Since(sink.lastBatchTime),
 				sink.GetBatchTimeoutSecs(), sink.lastBatchTime)
 		}
@@ -487,7 +487,7 @@ func setupSinks() {
 			sink.vm = NewSinkVM(string(script), sink.ID)
 		}
 
-		sinkChannels[sink.ID] = make(chan string, 100)
+		sinkChannels[sink.ID] = make(chan string, 1000)
 		db, err, isSpaceError := initSetupSql(sink.DatabasePath, false, "sink", sink.ID)
 		if err != nil {
 			if !isSpaceError {

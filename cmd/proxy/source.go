@@ -101,7 +101,7 @@ func setupSources() {
 			logger.FatalContext("source", sourceConfig.ID, "Unsupported source type: %s", sourceConfig.Type)
 		}
 
-		eventChan := make(chan EventSource)
+		eventChan := make(chan EventSource, 1000)
 		if err := source.Init(sourceConfig, eventChan); err != nil {
 			logger.FatalContext("source", sourceConfig.ID, "Failed to initialize source %s: %v", sourceConfig.ID, err)
 		}
