@@ -3,18 +3,20 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/pprof"
 	"runtime"
 	"sync"
 	"time"
-	"fmt"
+
 	"github.com/chamot1111/replayforge/version"
 
 	"github.com/chamot1111/replayforge/pkgs/logger"
 	"github.com/shirou/gopsutil/v4/cpu"
-	"github.com/shirou/gopsutil/v4/mem"
 	"github.com/shirou/gopsutil/v4/disk"
+	"github.com/shirou/gopsutil/v4/mem"
 )
 
 type Stats struct {
@@ -57,13 +59,13 @@ func getStatuszInfo(includeLogs bool, sinkFilter string, sourceFilter string) ma
 			}
 		} else {
 			sinkInfo := map[string]interface{}{
-				"id":                 stats.Sinks[sink.ID].ID,
-				"url":                stats.Sinks[sink.ID].URL,
-				"messagesByMinute":   stats.Sinks[sink.ID].MessagesByMinute,
-				"messageSinceStart":  stats.Sinks[sink.ID].MessagesSinceStart,
-				"lastMessageDate":    stats.Sinks[sink.ID].LastMessageDate,
-				"totalEvents":        count,
-				"batchCounter":       sink.batchCounter,
+				"id":                stats.Sinks[sink.ID].ID,
+				"url":               stats.Sinks[sink.ID].URL,
+				"messagesByMinute":  stats.Sinks[sink.ID].MessagesByMinute,
+				"messageSinceStart": stats.Sinks[sink.ID].MessagesSinceStart,
+				"lastMessageDate":   stats.Sinks[sink.ID].LastMessageDate,
+				"totalEvents":       count,
+				"batchCounter":      sink.batchCounter,
 				"lastMessage": func(msg string) string {
 					if len(msg) > 15 {
 						return msg[:15] + "..."
@@ -111,11 +113,11 @@ func getStatuszInfo(includeLogs bool, sinkFilter string, sourceFilter string) ma
 		}
 
 		sourceInfo := map[string]interface{}{
-			"type":               stats.Sources[sourceConfig.ID].Type,
-			"id":                 stats.Sources[sourceConfig.ID].ID,
-			"messagesByMinute":   stats.Sources[sourceConfig.ID].MessagesByMinute,
-			"messageSinceStart":  stats.Sources[sourceConfig.ID].MessagesSinceStart,
-			"lastMessageDate":    stats.Sources[sourceConfig.ID].LastMessageDate,
+			"type":              stats.Sources[sourceConfig.ID].Type,
+			"id":                stats.Sources[sourceConfig.ID].ID,
+			"messagesByMinute":  stats.Sources[sourceConfig.ID].MessagesByMinute,
+			"messageSinceStart": stats.Sources[sourceConfig.ID].MessagesSinceStart,
+			"lastMessageDate":   stats.Sources[sourceConfig.ID].LastMessageDate,
 		}
 
 		if includeLogs {
@@ -168,18 +170,18 @@ func startNodeInfoReporting() {
 
 			statuszInfo := getStatuszInfo(false, "", "")
 			nodeInfo := struct {
-				MemoryProcess     float64                 `json:"memoryProcess"`
-				MemoryHostTotal   float64                 `json:"memoryHostTotal"`
-				MemoryHostFree    float64                 `json:"memoryHostFree"`
-				MemoryHostUsedPct float64                 `json:"memoryHostUsedPct"`
-				CpuPercentHost    float64                 `json:"cpuPercentHost"`
-				DiskTotal         float64                 `json:"diskTotal"`
-				DiskFree          float64                 `json:"diskFree"`
-				DiskUsedPct       float64                 `json:"diskUsedPct"`
-				LastUpdated       time.Time               `json:"lastUpdated"`
-				WarnCount         int64                   `json:"warnCount"`
-				ErrorCount        int64                   `json:"errorCount"`
-				StatuszInfo       map[string]interface{}  `json:"statuszInfo"`
+				MemoryProcess     float64                `json:"memoryProcess"`
+				MemoryHostTotal   float64                `json:"memoryHostTotal"`
+				MemoryHostFree    float64                `json:"memoryHostFree"`
+				MemoryHostUsedPct float64                `json:"memoryHostUsedPct"`
+				CpuPercentHost    float64                `json:"cpuPercentHost"`
+				DiskTotal         float64                `json:"diskTotal"`
+				DiskFree          float64                `json:"diskFree"`
+				DiskUsedPct       float64                `json:"diskUsedPct"`
+				LastUpdated       time.Time              `json:"lastUpdated"`
+				WarnCount         int64                  `json:"warnCount"`
+				ErrorCount        int64                  `json:"errorCount"`
+				StatuszInfo       map[string]interface{} `json:"statuszInfo"`
 			}{
 				MemoryProcess:     float64(memStats.Alloc),
 				MemoryHostTotal:   float64(v.Total),
@@ -236,6 +238,10 @@ func startNodeInfoReporting() {
 					continue
 				}
 				logger.TraceContext("sink", sink.ID, "Node info response: %s", resp.Status)
+				if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+					body, _ := io.ReadAll(resp.Body)
+					logger.ErrorContext("sink", sink.ID, "Bad node info response status %s: %s", resp.Status, string(body))
+				}
 				resp.Body.Close()
 			}
 
