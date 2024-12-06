@@ -230,6 +230,8 @@ func sendBatchContent(sink *Sink, contents []string, client *http.Client) error 
 		req.Header.Set(k, v)
 	}
 
+	bytesSent := uint64(len(batchJSON))
+
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to send request: %v", err)
@@ -242,6 +244,15 @@ func sendBatchContent(sink *Sink, contents []string, client *http.Client) error 
 	}
 
 	body, _ := io.ReadAll(resp.Body)
+	bytesRecv := uint64(len(body))
+
+	stats.Lock()
+	s := stats.Sinks[sink.ID]
+	s.AppBytesSent += bytesSent
+	s.AppBytesRecv += bytesRecv
+	stats.Sinks[sink.ID] = s
+	stats.Unlock()
+
 	logger.DebugContext("sink", sink.ID, "Batch #%d response: status=%d, body=%s", sink.batchCounter, resp.StatusCode, string(body))
 
 	return nil

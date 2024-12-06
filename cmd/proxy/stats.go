@@ -39,8 +39,15 @@ type SinkStats struct {
 	URL                string
 	MessagesByMinute   int
 	MessagesSinceStart int64
+	AppBytesSent        uint64
+	AppBytesRecv        uint64
 	LastMessageDate    time.Time
 }
+
+var (
+ AppBytesSentNodeInfo uint64
+ AppBytesRecvNodeInfo uint64
+)
 
 func getStatuszInfo(includeLogs bool, sinkFilter string, sourceFilter string) map[string]interface{} {
 	stats.RLock()
@@ -66,6 +73,8 @@ func getStatuszInfo(includeLogs bool, sinkFilter string, sourceFilter string) ma
 				"lastMessageDate":   stats.Sinks[sink.ID].LastMessageDate,
 				"totalEvents":       count,
 				"batchCounter":      sink.batchCounter,
+				"appBytesSent":      stats.Sinks[sink.ID].AppBytesSent,
+				"appBytesRecv":      stats.Sinks[sink.ID].AppBytesRecv,
 				"lastMessage": func(msg string) string {
 					if len(msg) > 15 {
 						return msg[:15] + "..."
@@ -169,6 +178,12 @@ func startNodeInfoReporting() {
 			warnCount, errorCount := logger.GetLogStats()
 
 			statuszInfo := getStatuszInfo(false, "", "")
+			var totalBytesSent uint64
+			var totalBytesRecv uint64
+			for _, sink := range stats.Sinks {
+				totalBytesSent += sink.AppBytesSent
+				totalBytesRecv += sink.AppBytesRecv
+			}
 			nodeInfo := struct {
 				MemoryProcess     float64                `json:"memoryProcess"`
 				MemoryHostTotal   float64                `json:"memoryHostTotal"`
@@ -182,6 +197,10 @@ func startNodeInfoReporting() {
 				WarnCount         int64                  `json:"warnCount"`
 				ErrorCount        int64                  `json:"errorCount"`
 				StatuszInfo       map[string]interface{} `json:"statuszInfo"`
+				AppBytesSentNodeInfo      uint64                 `json:"appBytesSent"`
+				AppBytesRecvNodeInfo      uint64                 `json:"appBytesRecv"`
+				AppBytesSentTotal      uint64                 `json:"appBytesSentTotal"`
+				AppBytesRecvTotal      uint64                 `json:"appBytesRecvTotal"`
 			}{
 				MemoryProcess:     float64(memStats.Alloc),
 				MemoryHostTotal:   float64(v.Total),
@@ -195,6 +214,10 @@ func startNodeInfoReporting() {
 				WarnCount:         warnCount,
 				ErrorCount:        errorCount,
 				StatuszInfo:       statuszInfo,
+				AppBytesSentNodeInfo:      AppBytesSentNodeInfo,
+				AppBytesRecvNodeInfo:      AppBytesRecvNodeInfo,
+				AppBytesSentTotal:      AppBytesSentNodeInfo + totalBytesSent,
+				AppBytesRecvTotal:      AppBytesRecvNodeInfo + totalBytesRecv,
 			}
 
 			jsonData, err := json.Marshal(nodeInfo)
@@ -202,7 +225,6 @@ func startNodeInfoReporting() {
 				logger.Error("Failed to marshal node info: %v", err)
 				continue
 			}
-
 			sentUrls := make(map[string]bool)
 			for _, sink := range config.Sinks {
 				if sink.NotRelay || sentUrls[sink.URL] {
@@ -243,6 +265,10 @@ func startNodeInfoReporting() {
 				if err != nil {
 					logger.ErrorContext("sink", sink.ID, "Failed to send node info: %v", err)
 					continue
+				}
+				AppBytesSentNodeInfo += uint64(len(jsonData))
+				if resp.ContentLength > 0 {
+					AppBytesRecvNodeInfo += uint64(resp.ContentLength)
 				}
 				logger.TraceContext("sink", sink.ID, "Node info response: %s", resp.Status)
 				if resp.StatusCode < 200 || resp.StatusCode >= 300 {
