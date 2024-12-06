@@ -50,6 +50,7 @@ type NodeInfo struct {
 	AppBytesRecvNodeInfo uint64               `json:"appBytesRecvNodeInfo"`
 	AppBytesSentTotal    uint64               `json:"appBytesSentTotal"`
 	AppBytesRecvTotal    uint64               `json:"appBytesRecvTotal"`
+	EnvName                     string                    `json:"envName"`
 }
 
 type BucketConfig struct {

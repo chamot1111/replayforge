@@ -554,10 +554,33 @@ func (s *SqliteSink) handlePost(table string, body []byte) error {
 	timestamp := time.Now().Unix()
 	if t, ok := data["timestamp"]; ok {
 		switch v := t.(type) {
-		case int64:
-			timestamp = v
-		case float64:
-			timestamp = int64(v)
+			case int64:
+				// Convert milliseconds, microseconds, nanoseconds to seconds
+				if v > 3000000000 {
+					if v > 1000000000000000 {
+						timestamp = v / 1000000000 // nanoseconds to seconds
+					} else if v > 1000000000000 {
+						timestamp = v / 1000000 // microseconds to seconds
+					} else {
+						timestamp = v / 1000 // milliseconds to seconds
+					}
+				} else {
+					timestamp = v // already in seconds
+				}
+			case float64:
+				// Convert milliseconds, microseconds, nanoseconds to seconds
+				v64 := int64(v)
+				if v64 > 3000000000 {
+					if v64 > 1000000000000000 {
+						timestamp = v64 / 1000000000 // nanoseconds to seconds
+					} else if v64 > 1000000000000 {
+						timestamp = v64 / 1000000 // microseconds to seconds
+					} else {
+						timestamp = v64 / 1000 // milliseconds to seconds
+					}
+				} else {
+					timestamp = v64 // already in seconds
+				}
 		case string:
 			if ts, err := time.Parse(time.RFC3339, v); err == nil {
 				timestamp = ts.Unix()
