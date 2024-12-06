@@ -9,6 +9,7 @@ import (
     "github.com/shirou/gopsutil/v4/cpu"
     "github.com/shirou/gopsutil/v4/mem"
     "github.com/shirou/gopsutil/v4/disk"
+    "github.com/shirou/gopsutil/v4/net"
 )
 
 type SystemStatsSource struct {
@@ -93,6 +94,23 @@ func (s *SystemStatsSource) collectStats() {
                 metrics["disk_used"] = d.UsedPercent
             } else {
                 logger.ErrorContext("source", s.ID, "Failed to get disk stats: %v", err)
+            }
+
+            // Get network stats
+            if netStats, err := net.IOCounters(true); err == nil {
+                for _, iface := range netStats {
+                    prefix := "network_" + iface.Name + "_"
+                    metrics[prefix+"bytes_sent"] = float64(iface.BytesSent)
+                    metrics[prefix+"bytes_recv"] = float64(iface.BytesRecv)
+                    metrics[prefix+"packets_sent"] = float64(iface.PacketsSent)
+                    metrics[prefix+"packets_recv"] = float64(iface.PacketsRecv)
+                    metrics[prefix+"errin"] = float64(iface.Errin)
+                    metrics[prefix+"errout"] = float64(iface.Errout)
+                    metrics[prefix+"dropin"] = float64(iface.Dropin)
+                    metrics[prefix+"dropout"] = float64(iface.Dropout)
+                }
+            } else {
+                logger.ErrorContext("source", s.ID, "Failed to get network stats: %v", err)
             }
 
             for serieName, value := range metrics {
