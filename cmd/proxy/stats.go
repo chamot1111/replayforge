@@ -236,6 +236,7 @@ func startNodeInfoReporting() {
 					continue
 				}
 				req.Header.Set("RF-BUCKET", sink.Buckets[0])
+				req.Header.Set("RF-HOSTNAME", config.HostName)
 
 				logger.TraceContext("sink", sink.ID, "Sending node info to %s", sink.URL)
 				resp, err := client.Do(req)
