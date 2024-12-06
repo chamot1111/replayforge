@@ -46,7 +46,7 @@ type NodeInfo struct {
 	DiskFree          float64                 `json:"diskFree"`
 	DiskUsedPct       float64                 `json:"diskUsedPct"`
 	StatuszInfo       map[string]interface{}  `json:"statuszInfo"`
-	AppBytesSentNodeInfo uint64               `json:"AppBytesSentNodeInfo"`
+	AppBytesSentNodeInfo uint64               `json:"appBytesSentNodeInfo"`
 	AppBytesRecvNodeInfo uint64               `json:"appBytesRecvNodeInfo"`
 	AppBytesSentTotal    uint64               `json:"appBytesSentTotal"`
 	AppBytesRecvTotal    uint64               `json:"appBytesRecvTotal"`

@@ -197,8 +197,8 @@ func startNodeInfoReporting() {
 				WarnCount         int64                  `json:"warnCount"`
 				ErrorCount        int64                  `json:"errorCount"`
 				StatuszInfo       map[string]interface{} `json:"statuszInfo"`
-				AppBytesSentNodeInfo      uint64                 `json:"AppBytesSentNodeInfo"`
-				AppBytesRecvNodeInfo      uint64                 `json:"AppBytesSentNodeInfo"`
+				AppBytesSentNodeInfo      uint64                 `json:"appBytesSentNodeInfo"`
+				AppBytesRecvNodeInfo      uint64                 `json:"appBytesRecvNodeInfo"`
 				AppBytesSentTotal      uint64                 `json:"appBytesSentTotal"`
 				AppBytesRecvTotal      uint64                 `json:"appBytesRecvTotal"`
 			}{
