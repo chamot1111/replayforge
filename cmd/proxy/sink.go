@@ -529,6 +529,7 @@ func setupSinks() {
 
 	if config.TsnetHostname != "" {
 		tsnetServer = &tsnet.Server{Hostname: config.TsnetHostname}
+		tsnetServer.Start()
 	} else {
 		for _, sink := range config.Sinks {
 			if sink.UseTsnet {

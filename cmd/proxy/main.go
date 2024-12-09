@@ -114,7 +114,6 @@ func init() {
 
 // main starts all services and runs the application
 func main() {
-	defer tsnetServer.Close() // started in setupSinks
 	logLevel := os.Getenv("RPF_LOG_LEVEL")
 	if logLevel != "" {
 		logger.SetLogLevel(logLevel)
