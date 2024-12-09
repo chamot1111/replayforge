@@ -41,6 +41,7 @@ type Sink struct {
 	vm                   *SinkVM
 	lastBatchTime        time.Time
 	batchCounter         int // Added field to track batch count
+	httpClient           *http.Client // Added field for reusable client
 }
 
 type LuaVM struct {
@@ -92,16 +93,6 @@ func sinkDbToRelayServer(sink Sink) error {
 	var batchSize int
 	var batchSent bool
 
-	var client *http.Client
-	if sink.UseTsnet && tsnetServer != nil {
-		client = tsnetServer.HTTPClient()
-		client.Timeout = time.Duration(sink.GetBatchTimeoutSecs()) * time.Second
-	} else {
-		client = &http.Client{
-			Timeout: time.Duration(sink.GetBatchTimeoutSecs()) * time.Second,
-		}
-	}
-
 	maxPayload := sink.GetMaxPayloadBytes()
 
 	for rows.Next() {
@@ -133,7 +124,7 @@ func sinkDbToRelayServer(sink Sink) error {
 
 		if shouldSend {
 			sink.batchCounter++
-			if err := sendBatchContent(&sink, batchContent, client); err != nil {
+			if err := sendBatchContent(&sink, batchContent, sink.httpClient); err != nil {
 				logger.ErrorContext("sink", sink.ID, "Failed to send batch content (batch #%d): %v", sink.batchCounter, err)
 				idsToDelete = idsToDelete[len(batchContent):]
 				return err
@@ -151,7 +142,7 @@ func sinkDbToRelayServer(sink Sink) error {
 	// Send any remaining messages that didn't reach goal size
 	if len(batchContent) > 0 && time.Since(sink.lastBatchTime) >= time.Duration(sink.GetBatchTimeoutSecs())*time.Second {
 		sink.batchCounter++
-		if err := sendBatchContent(&sink, batchContent, client); err != nil {
+		if err := sendBatchContent(&sink, batchContent, sink.httpClient); err != nil {
 			logger.ErrorContext("sink", sink.ID, "Failed to send final batch content (batch #%d): %v", sink.batchCounter, err)
 			idsToDelete = idsToDelete[len(batchContent):]
 			return err
@@ -498,6 +489,13 @@ func setupSinks() {
 			}
 			sink.vm = NewSinkVM(string(script), sink.ID)
 		}
+
+		if sink.UseTsnet && tsnetServer != nil {
+			sink.httpClient = tsnetServer.HTTPClient()
+		} else {
+			sink.httpClient = &http.Client{}
+		}
+		sink.httpClient.Timeout = time.Duration(sink.GetBatchTimeoutSecs()) * time.Second
 
 		sinkChannels[sink.ID] = make(chan string, 1000)
 		db, err, isSpaceError := initSetupSql(sink.DatabasePath, false, "sink", sink.ID)
