@@ -100,6 +100,7 @@ var (
 	stats               Stats
 	dbgScriptPath       string
 	dbgFilePath         string
+	tsComputedName      string
 )
 
 // init initializes configuration and sets up resources
@@ -113,14 +114,13 @@ func init() {
 
 // main starts all services and runs the application
 func main() {
+	defer tsnetServer.Close() // started in setupSinks
 	logLevel := os.Getenv("RPF_LOG_LEVEL")
 	if logLevel != "" {
 		logger.SetLogLevel(logLevel)
 	}
 
 	startStatsCleaner()
-	startTsnetServer()
-	defer tsnetServer.Close()
 	startSources()
 	startSinkProcessing()
 	startTimerHandlers()
@@ -177,16 +177,6 @@ func startStatsCleaner() {
 			stats.Unlock()
 		}
 	}()
-}
-
-func startTsnetServer() {
-	if tsnetServer != nil {
-		go func() {
-			if err := tsnetServer.Start(); err != nil {
-				logger.Fatal("Failed to start tsnet server: %v", err)
-			}
-		}()
-	}
 }
 
 func startSources() {
