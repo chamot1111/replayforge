@@ -120,6 +120,7 @@ func main() {
 
 	startStatsCleaner()
 	startTsnetServer()
+	defer tsnetServer.Close()
 	startSources()
 	startSinkProcessing()
 	startTimerHandlers()
@@ -185,7 +186,6 @@ func startTsnetServer() {
 				logger.Fatal("Failed to start tsnet server: %v", err)
 			}
 		}()
-		defer tsnetServer.Close()
 	}
 }
 
