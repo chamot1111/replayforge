@@ -37,10 +37,10 @@ type Config struct {
 	Sources         []json.RawMessage
 	Sinks           []Sink
 	TsnetHostname   string `json:"tsnetHostname"`
-	PortStatusZ     int    `json:"portStatusZ"`
 	EnvName         string `json:"envName"`
 	HostName        string `json:"hostName"`
-	UseTsnetStatusZ bool   `json:"useTsnetStatusZ"`
+	PortStatusZ     int    `json:"portStatusZ"`
+	EnableStatusZ   bool   `json:"enableStatusZ"`
 	EnablePprof     bool   `json:"enablePprof"`   // Enable pprof profiling
 	VerbosityLevel  string `json:"verbosityLevel"` // Optional verbosity level (debug, info, warn, error)
 }
@@ -88,8 +88,17 @@ func loadConfig() {
 		logger.Fatal("Failed to parse config JSON: %v", err)
 	}
 
-	if config.UseTsnetStatusZ && config.TsnetHostname == "" {
-		logger.Fatal("TsnetHostname must be set when UseTsnetStatusZ is true")
+	if config.TsnetHostname != "" && config.EnableStatusZ == false {
+		config.EnableStatusZ = true
+	}
+
+	// Set default portStatusZ if not specified
+	if config.EnableStatusZ && config.PortStatusZ == 0 {
+		config.PortStatusZ = 5253
+	}
+
+	if config.PortStatusZ > 0 {
+		config.EnableStatusZ = true
 	}
 
 	if config.EnablePprof && config.PortStatusZ == 0 {

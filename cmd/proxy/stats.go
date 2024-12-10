@@ -314,7 +314,7 @@ func startStatusServer() {
 			w.Write([]byte("ok"))
 		})
 
-		if config.UseTsnetStatusZ && tsnetServer != nil {
+		if tsnetServer != nil {
 			ln, err := tsnetServer.Listen("tcp", fmt.Sprintf(":%d", config.PortStatusZ))
 			if err != nil {
 				logger.Fatal("Failed to create tsnet listener: %v", err)
