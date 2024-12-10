@@ -411,6 +411,9 @@ func (s *SqliteSink) handlePost(table string, body []byte) error {
 		data["id"] = strconv.FormatInt(s.LastRpfID, 10)
 	}
 
+	timestamp := normalizeTimestamp(data["timestamp"])
+	data["timestamp"] = timestamp
+
 	columns := make([]string, 0, len(data))
 	values := make([]interface{}, 0, len(data))
 	placeholders := make([]string, 0, len(data))
