@@ -132,14 +132,29 @@ func main() {
 }
 
 func startTsnetServer() {
-	if config.TsnetHostname != "" {
-		tsnetServer = &tsnet.Server{Hostname: config.TsnetHostname, RunWebClient: true}
-		if _, err := tsnetServer.Up(context.Background()); err != nil {
-			logger.Fatal("Failed to start tsnet server: %v", err)
-		}
-		ipv4, _ := tsnetServer.TailscaleIPs()
-		tsComputedName = ipv4.String()
-	}
+    if config.TsnetHostname != "" {
+        tsnetServer = &tsnet.Server{Hostname: config.TsnetHostname, RunWebClient: true}
+
+        // Create a channel to signal when the server is ready
+        ready := make(chan struct{})
+
+        go func() {
+            if _, err := tsnetServer.Up(context.Background()); err != nil {
+                logger.Fatal("Failed to start tsnet server: %v", err)
+            }
+            ipv4, _ := tsnetServer.TailscaleIPs()
+            tsComputedName = ipv4.String()
+            logger.Info("Started tsnet server with hostname %s and ip %s", config.TsnetHostname, tsComputedName)
+
+            // Signal that the server is ready
+            close(ready)
+        }()
+
+        // Block until the server is ready
+        <-ready
+    } else {
+    	logger.Info("Tsnet server not needed")
+    }
 }
 
 func initStats() {
