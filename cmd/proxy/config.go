@@ -92,13 +92,13 @@ func loadConfig() {
 		config.EnableStatusZ = true
 	}
 
+	if config.PortStatusZ > 0 {
+		config.EnableStatusZ = true
+	}
+
 	// Set default portStatusZ if not specified
 	if config.EnableStatusZ && config.PortStatusZ == 0 {
 		config.PortStatusZ = 5253
-	}
-
-	if config.PortStatusZ > 0 {
-		config.EnableStatusZ = true
 	}
 
 	if config.EnablePprof && config.PortStatusZ == 0 {
