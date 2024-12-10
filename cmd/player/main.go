@@ -669,6 +669,7 @@ func main() {
 	if useTsnet {
 		s = &tsnet.Server{
 			Hostname: tsnetHostname,
+			RunWebClient: true,
 		}
 		client = s.HTTPClient()
 	} else {

@@ -146,8 +146,10 @@ func startTsnetServer() {
                 logger.Fatal("Failed to start tsnet server: %v", err)
             }
 
-            tsComputedName = status.CurrentTailnet.Name
-            logger.Info("Started tsnet server with hostname %s and ip %s", config.TsnetHostname, tsComputedName)
+            backendState := status.BackendState
+            ipv4, _ := tsnetServer.TailscaleIPs()
+            tsComputedName = ipv4.String()
+            logger.Info("Started tsnet server with hostname %s and ip %s and backendState %s", config.TsnetHostname, tsComputedName, backendState)
 
             // Signal that the server is ready
             close(ready)
