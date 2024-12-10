@@ -231,7 +231,9 @@ func sendBatchContent(sink *Sink, contents []string, client *http.Client) error 
 			sink.httpClient = &http.Client{}
 		}
 		sink.httpClient.Timeout = time.Duration(sink.GetBatchTimeoutSecs()) * time.Second
-		return fmt.Errorf("failed to send request: %v", err)
+		return fmt.Errorf("failed to send request (client=%s): %v",
+			map[bool]string{true: "tsnet", false: "default"}[sink.UseTsnet],
+			err)
 	}
 	defer resp.Body.Close()
 

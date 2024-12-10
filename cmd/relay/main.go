@@ -315,6 +315,7 @@ func main() {
 		}
 		s := &tsnet.Server{
 			Hostname: hostname,
+			RunWebClient: true,
 		}
 		defer s.Close()
 

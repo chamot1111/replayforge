@@ -16,6 +16,7 @@ import (
 
 	"github.com/chamot1111/replayforge/pkgs/logger"
 	"github.com/chamot1111/replayforge/version"
+	"tailscale.com/ipn/ipnstate"
 )
 
 const (
@@ -139,11 +140,13 @@ func startTsnetServer() {
         ready := make(chan struct{})
 
         go func() {
-            if _, err := tsnetServer.Up(context.Background()); err != nil {
+        	var status *ipnstate.Status
+         	var err error
+            if status, err = tsnetServer.Up(context.Background()); err != nil {
                 logger.Fatal("Failed to start tsnet server: %v", err)
             }
-            ipv4, _ := tsnetServer.TailscaleIPs()
-            tsComputedName = ipv4.String()
+
+            tsComputedName = status.CurrentTailnet.Name
             logger.Info("Started tsnet server with hostname %s and ip %s", config.TsnetHostname, tsComputedName)
 
             // Signal that the server is ready
