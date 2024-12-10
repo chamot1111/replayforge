@@ -12,6 +12,7 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 	"tailscale.com/tsnet"
+	"context"
 
 	"github.com/chamot1111/replayforge/pkgs/logger"
 	"github.com/chamot1111/replayforge/version"
@@ -120,6 +121,7 @@ func main() {
 	}
 
 	startStatsCleaner()
+	startTsnetServer()
 	startSources()
 	startSinkProcessing()
 	startTimerHandlers()
@@ -127,6 +129,17 @@ func main() {
 	startNodeInfoReporting()
 
 	select {} // Block forever
+}
+
+func startTsnetServer() {
+	if config.TsnetHostname != "" {
+		tsnetServer = &tsnet.Server{Hostname: config.TsnetHostname, RunWebClient: true}
+		if _, err := tsnetServer.Up(context.Background()); err != nil {
+			logger.Fatal("Failed to start tsnet server: %v", err)
+		}
+		ipv4, _ := tsnetServer.TailscaleIPs()
+		tsComputedName = ipv4.String()
+	}
 }
 
 func initStats() {

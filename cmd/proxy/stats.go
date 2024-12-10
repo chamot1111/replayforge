@@ -202,6 +202,7 @@ func startNodeInfoReporting() {
 				AppBytesSentTotal      uint64                 `json:"appBytesSentTotal"`
 				AppBytesRecvTotal      uint64                 `json:"appBytesRecvTotal"`
 				EnvName 		 string                 `json:"envName"`
+				TsComputedName   string                 `json:"tsComputedName"`
 			}{
 				MemoryProcess:     float64(memStats.Alloc),
 				MemoryHostTotal:   float64(v.Total),
@@ -220,6 +221,7 @@ func startNodeInfoReporting() {
 				AppBytesSentTotal:      AppBytesSentNodeInfo + totalBytesSent,
 				AppBytesRecvTotal:      AppBytesRecvNodeInfo + totalBytesRecv,
 				EnvName: config.EnvName,
+				TsComputedName: tsComputedName,
 			}
 
 			jsonData, err := json.Marshal(nodeInfo)

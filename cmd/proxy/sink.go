@@ -15,7 +15,6 @@ import (
 	"github.com/Shopify/go-lua"
 	"github.com/chamot1111/replayforge/pkgs/logger"
 	"github.com/chamot1111/replayforge/pkgs/lualibs"
-	"tailscale.com/tsnet"
 )
 
 const (
@@ -37,10 +36,10 @@ type Sink struct {
 	MaxMessagesPerMinute int        `json:"maxMessagesPerMinute"`
 	TransformScript      string     `json:"transformScript"`
 	Config               SinkConfig `json:"config"`
-	NotRelay               bool       `json:"notRelay"`
+	NotRelay             bool       `json:"notRelay"`
 	vm                   *SinkVM
 	lastBatchTime        time.Time
-	batchCounter         int // Added field to track batch count
+	batchCounter         int          // Added field to track batch count
 	httpClient           *http.Client // Added field for reusable client
 }
 
@@ -527,10 +526,7 @@ func setupSinks() {
 		sinkBackoffDelays.Store(config.Sinks[i].ID, initialBackoffDelay)
 	}
 
-	if config.TsnetHostname != "" {
-		tsnetServer = &tsnet.Server{Hostname: config.TsnetHostname, RunWebClient: true}
-		tsnetServer.Start()
-	} else {
+	if config.TsnetHostname == "" {
 		for _, sink := range config.Sinks {
 			if sink.UseTsnet {
 				logger.ErrorContext("sink", sink.ID, "Sink uses tsnet but no tsnetHostname is configured")
