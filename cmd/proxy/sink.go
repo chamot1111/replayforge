@@ -94,6 +94,13 @@ func sinkDbToRelayServer(sink Sink) error {
 
 	maxPayload := sink.GetMaxPayloadBytes()
 
+	if sink.UseTsnet && tsnetServer != nil {
+		sink.httpClient = tsnetServer.HTTPClient()
+	} else {
+		sink.httpClient = &http.Client{}
+	}
+	sink.httpClient.Timeout = time.Duration(sink.GetBatchTimeoutSecs()) * time.Second
+
 	for rows.Next() {
 		var id int
 		var content string
@@ -224,13 +231,6 @@ func sendBatchContent(sink *Sink, contents []string, client *http.Client) error 
 
 	resp, err := client.Do(req)
 	if err != nil {
-		// Recreate HTTP client on error
-		if sink.UseTsnet && tsnetServer != nil {
-			sink.httpClient = tsnetServer.HTTPClient()
-		} else {
-			sink.httpClient = &http.Client{}
-		}
-		sink.httpClient.Timeout = time.Duration(sink.GetBatchTimeoutSecs()) * time.Second
 		return fmt.Errorf("failed to send request (client=%s): %v",
 			map[bool]string{true: "tsnet", false: "default"}[sink.UseTsnet],
 			err)
