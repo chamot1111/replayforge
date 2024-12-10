@@ -251,6 +251,8 @@ func init() {
 			sink = &HttpSink{}
 		case "db":
 			sink = &SqliteSink{}
+		case "time_series":
+			sink = &TimeseriesSink{}
 		case "alert":
 			sink = &AlertSink{}
 		case "log":

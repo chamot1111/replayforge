@@ -13,156 +13,22 @@ import (
 	"github.com/chamot1111/replayforge/pkgs/logger"
 	"github.com/chamot1111/replayforge/pkgs/playerplugin"
 
-	_ "github.com/mattn/go-sqlite3"
-	"sync"
 	"runtime"
+	"sync"
+
+	_ "github.com/mattn/go-sqlite3"
 )
-
-type TimeseriesType string
-
-const (
-	GaugeType    TimeseriesType = "gauge"
-	CounterType  TimeseriesType = "counter"
-	RollupType   TimeseriesType = "rollup"
-	DeltaType    TimeseriesType = "delta"
-	SnapshotType TimeseriesType = "snapshot"
-)
-
-type TimeseriesConfig struct {
-	Type      TimeseriesType
-	TableName string
-	Interval  time.Duration
-}
 
 type SqliteSink struct {
-	DB               *sql.DB
-	TableSchemas     map[string]map[string]string
-	TimeseriesTables map[string]TimeseriesConfig
-	ListenAddr       string
-	StaticDir        string
-	ID               string
-	ExposedPort      int
-	RowTTLSec        int64
-	DBPath           string
-	LastRpfID        int64
-}
-
-func (s *SqliteSink) registerTimeseriesTable(tableName string, parts []string) error {
-	if len(parts) < 4 {
-		return fmt.Errorf("invalid timeseries table name format")
-	}
-
-	tsType := TimeseriesType(parts[1])
-	interval, err := time.ParseDuration(parts[3])
-	if err != nil {
-		return fmt.Errorf("failed to parse interval: %v", err)
-	}
-
-	var query string
-
-	switch tsType {
-	case GaugeType:
-		query = fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (
-			timestamp INTEGER NOT NULL,
-			serie_name TEXT NOT NULL,
-			value REAL,
-			metadata JSON,
-			PRIMARY KEY (timestamp, serie_name)
-		)`, tableName)
-	case CounterType:
-		query = fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (
-			timestamp INTEGER NOT NULL,
-			serie_name TEXT NOT NULL,
-			count INTEGER,
-			increment INTEGER,
-			metadata JSON,
-			PRIMARY KEY (timestamp, serie_name)
-		)`, tableName)
-	case RollupType:
-		query = fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (
-			timestamp INTEGER NOT NULL,
-			serie_name TEXT NOT NULL,
-			min REAL,
-			max REAL,
-			avg REAL,
-			count INTEGER,
-			metadata JSON,
-			PRIMARY KEY (timestamp, serie_name)
-		)`, tableName)
-	case DeltaType:
-		query = fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (
-			timestamp INTEGER NOT NULL,
-			serie_name TEXT NOT NULL,
-			previous_value REAL,
-			current_value REAL,
-			delta REAL,
-			metadata JSON,
-			PRIMARY KEY (timestamp, serie_name)
-		)`, tableName)
-	case SnapshotType:
-		query = fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (
-			timestamp INTEGER NOT NULL,
-			serie_name TEXT NOT NULL,
-			value TEXT,
-			count INTEGER,
-			metadata JSON,
-			PRIMARY KEY (timestamp, serie_name, value)
-		)`, tableName)
-	default:
-		return fmt.Errorf("unknown timeseries type: %s", tsType)
-	}
-
-	_, err = s.DB.Exec(query)
-	if err != nil {
-		return fmt.Errorf("failed to create timeseries table: %v", err)
-	}
-
-	viewQuery := fmt.Sprintf(`CREATE VIEW IF NOT EXISTS v_%s_latest AS
-		SELECT * FROM %s
-		WHERE timestamp = (
-			SELECT MAX(timestamp) FROM %s
-		)`, tableName, tableName, tableName)
-	_, err = s.DB.Exec(viewQuery)
-	if err != nil {
-		return fmt.Errorf("failed to create latest view: %v", err)
-	}
-
-	triggerQuery := fmt.Sprintf(`CREATE TRIGGER IF NOT EXISTS cleanup_%s
-		AFTER INSERT ON %s
-		BEGIN
-			DELETE FROM %s
-			WHERE timestamp < NEW.timestamp - 86400;
-		END;`, tableName, tableName, tableName)
-	_, err = s.DB.Exec(triggerQuery)
-	if err != nil {
-		return fmt.Errorf("failed to create cleanup trigger: %v", err)
-	}
-
-	if _, exists := s.TableSchemas[tableName]; !exists {
-		s.TableSchemas[tableName] = make(map[string]string)
-		s.TableSchemas[tableName]["timestamp"] = "INTEGER"
-		s.TableSchemas[tableName]["serie_name"] = "TEXT"
-		s.TableSchemas[tableName]["value"] = "REAL"
-		s.TableSchemas[tableName]["metadata"] = "JSON"
-	}
-
-	err = s.ensureColumnExists(tableName, "_rpf_id", "INTEGER")
-	if err != nil {
-		return fmt.Errorf("failed to add _rpf_id column: %v", err)
-	}
-
-	err = s.ensureColumnExists(tableName, "_rpf_last_updated_idx", "INTEGER")
-	if err != nil {
-		return fmt.Errorf("failed to add _rpf_last_updated_idx column: %v", err)
-	}
-
-	s.TimeseriesTables[tableName] = TimeseriesConfig{
-		Type:      tsType,
-		TableName: tableName,
-		Interval:  interval,
-	}
-
-	return nil
+	DB           *sql.DB
+	TableSchemas map[string]map[string]string
+	ListenAddr   string
+	StaticDir    string
+	ID           string
+	ExposedPort  int
+	RowTTLSec    int64
+	DBPath       string
+	LastRpfID    int64
 }
 
 func (s *SqliteSink) Init(config playerplugin.SinkConfig, sinkChannels *sync.Map) error {
@@ -214,7 +80,6 @@ func (s *SqliteSink) Init(config playerplugin.SinkConfig, sinkChannels *sync.Map
 	s.DB = db
 	s.ID = config.ID
 	s.TableSchemas = make(map[string]map[string]string)
-	s.TimeseriesTables = make(map[string]TimeseriesConfig)
 	s.loadTableSchemas()
 	s.LastRpfID = 0
 
@@ -394,7 +259,7 @@ func (s *SqliteSink) Start() error {
 	mux.HandleFunc(fmt.Sprintf("/%s/columns/", s.ID), s.handleListColumns)
 	mux.HandleFunc(fmt.Sprintf("/%s/all-columns/", s.ID), s.handleListAllTablesColumns)
 	mux.HandleFunc(fmt.Sprintf("/%s/distinct-values/", s.ID), s.handleDisinctValuesForTableColumns)
-    mux.HandleFunc(fmt.Sprintf("/%s/time-analytics/", s.ID), s.handleTimeAnalytics)
+	mux.HandleFunc(fmt.Sprintf("/%s/time-analytics/", s.ID), s.handleTimeAnalytics)
 
 	if s.StaticDir != "" {
 		mux.Handle(fmt.Sprintf("/%s/static/", s.ID), http.StripPrefix(fmt.Sprintf("/%s/static/", s.ID), http.FileServer(http.Dir(s.StaticDir))))
@@ -453,19 +318,9 @@ func (s *SqliteSink) Execute(method, path string, body []byte, headers map[strin
 		return fmt.Errorf("invalid table name: %s - only alphanumeric characters, underscore and dash are allowed", table)
 	}
 
-	if strings.HasPrefix(table, "ts_") {
-		if _, exists := s.TimeseriesTables[table]; !exists {
-			parts := strings.Split(table, "_")
-			err := s.registerTimeseriesTable(table, parts)
-			if err != nil {
-				return err
-			}
-		}
-	} else {
-		err := s.ensureTableExists(table)
-		if err != nil {
-			return err
-		}
+	err := s.ensureTableExists(table)
+	if err != nil {
+		return err
 	}
 
 	switch method {
@@ -518,11 +373,11 @@ func (s *SqliteSink) ensureColumnExists(table, column, dataType string) error {
 		s.TableSchemas[table][column] = dataType
 
 		if strings.HasSuffix(column, "idx") ||
-					strings.HasSuffix(column, "index") ||
-					strings.HasSuffix(column, "id") ||
-					strings.Contains(column, "fk") ||
-					column == "timestamp" ||
-					column == "status" {
+			strings.HasSuffix(column, "index") ||
+			strings.HasSuffix(column, "id") ||
+			strings.Contains(column, "fk") ||
+			column == "timestamp" ||
+			column == "status" {
 			indexQuery := fmt.Sprintf("CREATE INDEX IF NOT EXISTS idx_%s_%s ON %s(%s)",
 				table, column, table, column)
 			_, err = s.DB.Exec(indexQuery)
@@ -551,153 +406,9 @@ func (s *SqliteSink) handlePost(table string, body []byte) error {
 	data["_rpf_last_updated_idx"] = time.Now().Unix()
 	s.LastRpfID++
 	data["_rpf_id"] = s.LastRpfID
-	timestamp := time.Now().Unix()
-	if t, ok := data["timestamp"]; ok {
-		switch v := t.(type) {
-			case int64:
-				// Convert milliseconds, microseconds, nanoseconds to seconds
-				if v > 3000000000 {
-					if v > 1000000000000000 {
-						timestamp = v / 1000000000 // nanoseconds to seconds
-					} else if v > 1000000000000 {
-						timestamp = v / 1000000 // microseconds to seconds
-					} else {
-						timestamp = v / 1000 // milliseconds to seconds
-					}
-				} else {
-					timestamp = v // already in seconds
-				}
-			case float64:
-				// Convert milliseconds, microseconds, nanoseconds to seconds
-				v64 := int64(v)
-				if v64 > 3000000000 {
-					if v64 > 1000000000000000 {
-						timestamp = v64 / 1000000000 // nanoseconds to seconds
-					} else if v64 > 1000000000000 {
-						timestamp = v64 / 1000000 // microseconds to seconds
-					} else {
-						timestamp = v64 / 1000 // milliseconds to seconds
-					}
-				} else {
-					timestamp = v64 // already in seconds
-				}
-		case string:
-			if ts, err := time.Parse(time.RFC3339, v); err == nil {
-				timestamp = ts.Unix()
-			} else if ts, err := time.Parse("2006-01-02T15:04:05Z", v); err == nil {
-				timestamp = ts.Unix()
-			} else if ts, err := time.Parse("2006-01-02 15:04:05", v); err == nil {
-				timestamp = ts.Unix()
-			} else if ts, err := time.Parse("02/Jan/2006:15:04:05 -0700", v); err == nil {
-				timestamp = ts.Unix()
-			} else {
-				// Try parsing as Unix timestamp string
-				if i, err := strconv.ParseInt(v, 10, 64); err == nil {
-					timestamp = i
-				}
-			}
-		}
-	}
-	data["timestamp"] = timestamp
 
-	if strings.HasPrefix(table, "ts_") {
-
-		if tsConfig, ok := s.TimeseriesTables[table]; ok {
-			// Round timestamp to nearest interval
-			interval := int64(tsConfig.Interval.Seconds())
-			timestamp = (timestamp / interval) * interval
-			data["timestamp"] = timestamp
-
-			if _, ok := data["serie_name"]; !ok {
-				data["serie_name"] = "default"
-			}
-
-			switch tsConfig.Type {
-			case CounterType:
-			if value, ok := data["value"]; ok {
-				var currentCount sql.NullInt64
-				row := s.DB.QueryRow(fmt.Sprintf("SELECT count FROM %s WHERE timestamp = ? AND serie_name = ?", table), data["timestamp"], data["serie_name"])
-				err := row.Scan(&currentCount)
-				if err != nil {
-					if err == sql.ErrNoRows {
-						data["count"] = int64(value.(float64))
-					} else {
-						return fmt.Errorf("failed to query current count: %v", err)
-					}
-				} else {
-					if currentCount.Valid {
-						data["count"] = currentCount.Int64 + int64(value.(float64))
-					} else {
-						data["count"] = int64(value.(float64))
-					}
-				}
-				data["increment"] = value
-			}
-			case RollupType:
-				if value, ok := data["value"]; ok {
-					var min, max, sum float64 = 0, 0, 0
-					var count int64 = 0
-					row := s.DB.QueryRow(fmt.Sprintf("SELECT min, max, avg * count, count FROM %s WHERE timestamp = ? AND serie_name = ?", table), data["timestamp"], data["serie_name"])
-					err := row.Scan(&min, &max, &sum, &count)
-					if err != nil {
-						if err == sql.ErrNoRows {
-							data["min"] = value
-							data["max"] = value
-							data["avg"] = value
-							data["count"] = 1
-						} else {
-							return fmt.Errorf("failed to query rollup values: %v", err)
-						}
-					} else {
-						v := value.(float64)
-						if v < min {
-							data["min"] = v
-						} else {
-							data["min"] = min
-						}
-						if v > max {
-							data["max"] = v
-						} else {
-							data["max"] = max
-						}
-						data["avg"] = (sum + v) / float64(count+1)
-						data["count"] = count + 1
-					}
-				}
-			case DeltaType:
-				if value, ok := data["value"]; ok {
-					var previousValue float64 = 0
-					row := s.DB.QueryRow(fmt.Sprintf("SELECT current_value FROM %s WHERE serie_name = ? AND timestamp = (SELECT MAX(timestamp) FROM %s WHERE timestamp < ? AND serie_name = ?)", table, table), data["serie_name"], data["timestamp"], data["serie_name"])
-					err := row.Scan(&previousValue)
-					if err != nil && err != sql.ErrNoRows {
-						return fmt.Errorf("failed to query previous value: %v", err)
-					}
-					currentValue := value.(float64)
-					data["previous_value"] = previousValue
-					data["current_value"] = currentValue
-					data["delta"] = currentValue - previousValue
-				}
-			case SnapshotType:
-				if value, ok := data["value"]; ok {
-					var count int64 = 0
-					row := s.DB.QueryRow(fmt.Sprintf("SELECT count FROM %s WHERE timestamp = ? AND serie_name = ? AND value = ?", table), data["timestamp"], data["serie_name"], value)
-					err := row.Scan(&count)
-					if err != nil {
-						if err == sql.ErrNoRows {
-							data["count"] = 1
-						} else {
-							return fmt.Errorf("failed to query snapshot count: %v", err)
-						}
-					} else {
-						data["count"] = count + 1
-					}
-				}
-			}
-		}
-	} else {
-		if _, ok := data["id"]; !ok {
-			data["id"] = strconv.FormatInt(s.LastRpfID, 10)
-		}
+	if _, ok := data["id"]; !ok {
+		data["id"] = strconv.FormatInt(s.LastRpfID, 10)
 	}
 
 	columns := make([]string, 0, len(data))
@@ -739,21 +450,12 @@ func (s *SqliteSink) handleDelete(table string, body []byte) error {
 		return fmt.Errorf("failed to unmarshal JSON: %v", err)
 	}
 
-	if strings.HasPrefix(table, "ts_") {
-		timestamp, ok := data["timestamp"]
-		if !ok {
-			return fmt.Errorf("timestamp is required for timeseries delete")
-		}
-		query := fmt.Sprintf("DELETE FROM %s WHERE timestamp = ?", table)
-		_, err = s.DB.Exec(query, timestamp)
-	} else {
-		id, ok := data["id"]
-		if !ok {
-			return fmt.Errorf("id is required for delete")
-		}
-		query := fmt.Sprintf("DELETE FROM %s WHERE id = ?", table)
-		_, err = s.DB.Exec(query, id)
+	id, ok := data["id"]
+	if !ok {
+		return fmt.Errorf("id is required for delete")
 	}
+	query := fmt.Sprintf("DELETE FROM %s WHERE id = ?", table)
+	_, err = s.DB.Exec(query, id)
 
 	if err != nil {
 		return fmt.Errorf("failed to delete: %v", err)
@@ -822,159 +524,159 @@ func (s *SqliteSink) handleFindRequest(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *SqliteSink) handleTimeAnalytics(w http.ResponseWriter, r *http.Request) {
-    if r.Method != http.MethodGet {
-        http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-        return
-    }
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 
-    // Parse query parameters
-    table := r.URL.Query().Get("table")
-    if table == "" {
-        http.Error(w, "Table parameter is required", http.StatusBadRequest)
-        return
-    }
+	// Parse query parameters
+	table := r.URL.Query().Get("table")
+	if table == "" {
+		http.Error(w, "Table parameter is required", http.StatusBadRequest)
+		return
+	}
 
-    startTime := r.URL.Query().Get("start_time")
-    if startTime == "" {
-        http.Error(w, "start_time parameter is required", http.StatusBadRequest)
-        return
-    }
+	startTime := r.URL.Query().Get("start_time")
+	if startTime == "" {
+		http.Error(w, "start_time parameter is required", http.StatusBadRequest)
+		return
+	}
 
-    stopTime := r.URL.Query().Get("stop_time")
-    if stopTime == "" {
-        http.Error(w, "stop_time parameter is required", http.StatusBadRequest)
-        return
-    }
+	stopTime := r.URL.Query().Get("stop_time")
+	if stopTime == "" {
+		http.Error(w, "stop_time parameter is required", http.StatusBadRequest)
+		return
+	}
 
-    rangeTime := r.URL.Query().Get("range_time")
-    if rangeTime == "" {
-        http.Error(w, "range_time parameter is required", http.StatusBadRequest)
-        return
-    }
+	rangeTime := r.URL.Query().Get("range_time")
+	if rangeTime == "" {
+		http.Error(w, "range_time parameter is required", http.StatusBadRequest)
+		return
+	}
 
-    // Convert range_time to seconds
-    rangeDuration, err := time.ParseDuration(rangeTime)
-    if err != nil {
-        http.Error(w, "Invalid range_time format. Use format like '1h', '30m', '1d'", http.StatusBadRequest)
-        return
-    }
-    rangeSeconds := int64(rangeDuration.Seconds())
+	// Convert range_time to seconds
+	rangeDuration, err := time.ParseDuration(rangeTime)
+	if err != nil {
+		http.Error(w, "Invalid range_time format. Use format like '1h', '30m', '1d'", http.StatusBadRequest)
+		return
+	}
+	rangeSeconds := int64(rangeDuration.Seconds())
 
-    // Check if status column exists
-    hasStatus := false
-    columns, err := s.DB.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
-    if err != nil {
-        http.Error(w, fmt.Sprintf("Error querying table schema: %v", err), http.StatusInternalServerError)
-        return
-    }
-    defer columns.Close()
+	// Check if status column exists
+	hasStatus := false
+	columns, err := s.DB.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Error querying table schema: %v", err), http.StatusInternalServerError)
+		return
+	}
+	defer columns.Close()
 
-    for columns.Next() {
-        var cid int
-        var name, dataType string
-        var notNull, pk int
-        var dfltValue interface{}
-        if err := columns.Scan(&cid, &name, &dataType, &notNull, &dfltValue, &pk); err != nil {
-            http.Error(w, fmt.Sprintf("Error scanning column info: %v", err), http.StatusInternalServerError)
-            return
-        }
-        if name == "status" {
-            hasStatus = true
-            break
-        }
-    }
+	for columns.Next() {
+		var cid int
+		var name, dataType string
+		var notNull, pk int
+		var dfltValue interface{}
+		if err := columns.Scan(&cid, &name, &dataType, &notNull, &dfltValue, &pk); err != nil {
+			http.Error(w, fmt.Sprintf("Error scanning column info: %v", err), http.StatusInternalServerError)
+			return
+		}
+		if name == "status" {
+			hasStatus = true
+			break
+		}
+	}
 
-    // Prepare the query based on whether status column exists
-    var query string
-    if hasStatus {
-        query = fmt.Sprintf(`
-            WITH RECURSIVE
-            time_ranges AS (
-                SELECT CAST(? AS INTEGER) as range_start
-                UNION ALL
-                SELECT range_start + ?
-                FROM time_ranges
-                WHERE range_start + ? <= CAST(? AS INTEGER)
-            )
-            SELECT
-                tr.range_start as time_bucket,
-                COALESCE(t.status, 'unknown') as status,
-                COUNT(t._rpf_id) as count
-            FROM time_ranges tr
-            LEFT JOIN %s t ON t._rpf_last_updated_idx >= tr.range_start
-                AND t._rpf_last_updated_idx < tr.range_start + ?
-                AND t._rpf_last_updated_idx >= CAST(? AS INTEGER)
-                AND t._rpf_last_updated_idx <= CAST(? AS INTEGER)
-            GROUP BY tr.range_start, t.status
-            ORDER BY tr.range_start, t.status
-        `, table)
-    } else {
-        query = fmt.Sprintf(`
-            WITH RECURSIVE
-            time_ranges AS (
-                SELECT CAST(? AS INTEGER) as range_start
-                UNION ALL
-                SELECT range_start + ?
-                FROM time_ranges
-                WHERE range_start + ? <= CAST(? AS INTEGER)
-            )
-            SELECT
-                tr.range_start as time_bucket,
-                COUNT(t._rpf_id) as count
-            FROM time_ranges tr
-            LEFT JOIN %s t ON t._rpf_last_updated_idx >= tr.range_start
-                AND t._rpf_last_updated_idx < tr.range_start + ?
-                AND t._rpf_last_updated_idx >= CAST(? AS INTEGER)
-                AND t._rpf_last_updated_idx <= CAST(? AS INTEGER)
-            GROUP BY tr.range_start
-            ORDER BY tr.range_start
-        `, table)
-    }
+	// Prepare the query based on whether status column exists
+	var query string
+	if hasStatus {
+		query = fmt.Sprintf(`
+												WITH RECURSIVE
+												time_ranges AS (
+																SELECT CAST(? AS INTEGER) as range_start
+																UNION ALL
+																SELECT range_start + ?
+																FROM time_ranges
+																WHERE range_start + ? <= CAST(? AS INTEGER)
+												)
+												SELECT
+																tr.range_start as time_bucket,
+																COALESCE(t.status, 'unknown') as status,
+																COUNT(t._rpf_id) as count
+												FROM time_ranges tr
+												LEFT JOIN %s t ON t._rpf_last_updated_idx >= tr.range_start
+																AND t._rpf_last_updated_idx < tr.range_start + ?
+																AND t._rpf_last_updated_idx >= CAST(? AS INTEGER)
+																AND t._rpf_last_updated_idx <= CAST(? AS INTEGER)
+												GROUP BY tr.range_start, t.status
+												ORDER BY tr.range_start, t.status
+								`, table)
+	} else {
+		query = fmt.Sprintf(`
+												WITH RECURSIVE
+												time_ranges AS (
+																SELECT CAST(? AS INTEGER) as range_start
+																UNION ALL
+																SELECT range_start + ?
+																FROM time_ranges
+																WHERE range_start + ? <= CAST(? AS INTEGER)
+												)
+												SELECT
+																tr.range_start as time_bucket,
+																COUNT(t._rpf_id) as count
+												FROM time_ranges tr
+												LEFT JOIN %s t ON t._rpf_last_updated_idx >= tr.range_start
+																AND t._rpf_last_updated_idx < tr.range_start + ?
+																AND t._rpf_last_updated_idx >= CAST(? AS INTEGER)
+																AND t._rpf_last_updated_idx <= CAST(? AS INTEGER)
+												GROUP BY tr.range_start
+												ORDER BY tr.range_start
+								`, table)
+	}
 
-    // Execute query
-    var rows *sql.Rows
-    if hasStatus {
-        rows, err = s.DB.Query(query, startTime, rangeSeconds, rangeSeconds, stopTime, rangeSeconds, startTime, stopTime)
-    } else {
-        rows, err = s.DB.Query(query, startTime, rangeSeconds, rangeSeconds, stopTime, rangeSeconds, startTime, stopTime)
-    }
-    if err != nil {
-        http.Error(w, fmt.Sprintf("Error executing query: %v", err), http.StatusInternalServerError)
-        return
-    }
-    defer rows.Close()
+	// Execute query
+	var rows *sql.Rows
+	if hasStatus {
+		rows, err = s.DB.Query(query, startTime, rangeSeconds, rangeSeconds, stopTime, rangeSeconds, startTime, stopTime)
+	} else {
+		rows, err = s.DB.Query(query, startTime, rangeSeconds, rangeSeconds, stopTime, rangeSeconds, startTime, stopTime)
+	}
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Error executing query: %v", err), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
 
-    // Process results
-    var results []map[string]interface{}
-    for rows.Next() {
-        result := make(map[string]interface{})
-        if hasStatus {
-            var timeBucket int64
-            var status string
-            var count int
-            if err := rows.Scan(&timeBucket, &status, &count); err != nil {
-                http.Error(w, fmt.Sprintf("Error scanning results: %v", err), http.StatusInternalServerError)
-                return
-            }
-            result["time_bucket"] = timeBucket
-            result["status"] = status
-            result["count"] = count
-        } else {
-            var timeBucket int64
-            var count int
-            if err := rows.Scan(&timeBucket, &count); err != nil {
-                http.Error(w, fmt.Sprintf("Error scanning results: %v", err), http.StatusInternalServerError)
-                return
-            }
-            result["time_bucket"] = timeBucket
-            result["count"] = count
-        }
-        results = append(results, result)
-    }
+	// Process results
+	var results []map[string]interface{}
+	for rows.Next() {
+		result := make(map[string]interface{})
+		if hasStatus {
+			var timeBucket int64
+			var status string
+			var count int
+			if err := rows.Scan(&timeBucket, &status, &count); err != nil {
+				http.Error(w, fmt.Sprintf("Error scanning results: %v", err), http.StatusInternalServerError)
+				return
+			}
+			result["time_bucket"] = timeBucket
+			result["status"] = status
+			result["count"] = count
+		} else {
+			var timeBucket int64
+			var count int
+			if err := rows.Scan(&timeBucket, &count); err != nil {
+				http.Error(w, fmt.Sprintf("Error scanning results: %v", err), http.StatusInternalServerError)
+				return
+			}
+			result["time_bucket"] = timeBucket
+			result["count"] = count
+		}
+		results = append(results, result)
+	}
 
-    // Return results
-    w.Header().Set("Content-Type", "application/json")
-    json.NewEncoder(w).Encode(results)
+	// Return results
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(results)
 }
 
 func (s *SqliteSink) handleGetRequest(w http.ResponseWriter, r *http.Request) {
@@ -983,8 +685,8 @@ func (s *SqliteSink) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 	query := fmt.Sprintf("SELECT * FROM %s", table)
 	var conditions []string
 	var args []interface{}
-	orderByClause := " ORDER BY _rpf_id"  // Default order
-	limitClause := " LIMIT 10000" // Default limit
+	orderByClause := " ORDER BY _rpf_id" // Default order
+	limitClause := " LIMIT 10000"        // Default limit
 
 	for key, values := range r.URL.Query() {
 		if key == "order" {
